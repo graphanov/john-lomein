@@ -102,6 +102,9 @@ SEALED_CAPTURE_SCHEMA = "john-lomein.persona-qualification-capture.v1"
 MAX_JSON_BYTES = 2_000_000
 MAX_ADAPTER_OUTPUT_BYTES = 4_000_000
 MAX_STDERR_BYTES = 4_000_000
+# Apple's system Python launcher requires a file-size ceiling above 4 MiB even
+# with an empty HOME. Adapter stdout/stderr remain separately capped at 4 MiB.
+MAX_ADAPTER_FILE_BYTES = 8_000_000
 MAX_RESPONSE_CHARS = 40_000
 MAX_RATIONALE_CHARS = 10_000
 MAX_SOUL_CHARS = 200_000
@@ -1513,7 +1516,7 @@ def safe_adapter_environment(
 
 def _limit_adapter_output_files() -> None:
     """Apply a kernel-enforced cap before an untrusted adapter begins."""
-    limit = max(MAX_ADAPTER_OUTPUT_BYTES, MAX_STDERR_BYTES)
+    limit = MAX_ADAPTER_FILE_BYTES
     resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
 
 
