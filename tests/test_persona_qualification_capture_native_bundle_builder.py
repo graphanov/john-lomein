@@ -28,6 +28,24 @@ builder = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = builder
 SPEC.loader.exec_module(builder)
 
+
+def _live_bundle_runtime_supported() -> bool:
+    if sys.platform != "darwin":
+        return False
+    trusted_python = Path(
+        getattr(sys, "_base_executable", sys.executable)
+    ).resolve()
+    if not trusted_python.is_file():
+        return False
+    try:
+        builder.probe_runtime(trusted_python)
+    except builder.CaptureBundleBuildError:
+        return False
+    return True
+
+
+LIVE_BUNDLE_RUNTIME_SUPPORTED = _live_bundle_runtime_supported()
+
 from qualification_attestor import (  # noqa: E402
     john_lomein_persona_qualification_native_bundle as native_bundle,
 )
@@ -291,8 +309,8 @@ class CaptureNativeBundleBuilderTests(unittest.TestCase):
         )
 
     @unittest.skipUnless(
-        sys.platform == "darwin",
-        "live relocated native bundle requires macOS",
+        LIVE_BUNDLE_RUNTIME_SUPPORTED,
+        "host CPython cannot produce a trusted relocated native bundle",
     )
     def test_failure_rolls_destination_back_to_empty(self) -> None:
         destination = self.root / "rollback-bundle"
@@ -318,8 +336,8 @@ class CaptureNativeBundleBuilderTests(unittest.TestCase):
         self.assertFalse(builder.external_manifest_path(destination).exists())
 
     @unittest.skipUnless(
-        sys.platform == "darwin",
-        "live relocated native bundle requires macOS",
+        LIVE_BUNDLE_RUNTIME_SUPPORTED,
+        "host CPython cannot produce a trusted relocated native bundle",
     )
     def test_live_relocated_capture_bundle_and_v3_manifest(self) -> None:
         trusted_python = Path(
