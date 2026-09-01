@@ -1,0 +1,27 @@
+{
+  "attestor_key_id": "example-repo-persona-ed25519-1",
+  "capture_lifecycle": {
+    "max_capture_slots": 1,
+    "max_orphan_age_seconds": 900,
+    "retention": "ephemeral"
+  },
+  "capture_limits": {
+    "max_bytes": 134217728,
+    "max_depth": 64,
+    "max_directories": 4096,
+    "max_file_bytes": 16777216,
+    "max_files": 4096
+  },
+  "checkout_identity_path": "/private/var/lib/john-lomein/example-repo/checkout",
+  "checkout_source_path": "/private/var/lib/john-lomein/example-repo/checkout",
+  "enabled": false,
+  "evidence_home_path": "/private/var/lib/john-lomein/example-repo",
+  "instance_manifest_path": "/private/operator/example-repo/instance.yaml",
+  "instance_slug": "example-repo",
+  "qualification_private_root": "/private/var/lib/john-lomein/example-repo/private/persona-qualification",
+  "qualification_public_root": "/private/var/lib/john-lomein/example-repo/runtime/state/persona-qualification",
+  "runtime_root": "/private/var/lib/john-lomein/example-repo/runtime",
+  "runtime_source_path": "/private/var/lib/john-lomein/example-repo/runtime",
+  "schema_version": "john-lomein.persona-qualification-install-config.v1",
+  "verifier_timeout_seconds": 300
+}

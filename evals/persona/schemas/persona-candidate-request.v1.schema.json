@@ -1,0 +1,290 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:john-lomein:schema:persona-candidate-request:v1",
+  "title": "John Lomein persona candidate request v1",
+  "description": "One JSON request written to a candidate adapter's stdin by the persona qualification runner.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "candidate",
+    "adapter",
+    "scenario",
+    "profile",
+    "persona",
+    "soul_sha256",
+    "effective_prompt",
+    "effective_prompt_sha256",
+    "execution_policy"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "john-lomein.persona-candidate-request.v1"
+    },
+    "run_id": {
+      "$ref": "#/$defs/runId"
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "slots",
+        "provider",
+        "model",
+        "reasoning_effort"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/component"
+        },
+        "slots": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "primary",
+              "fallback"
+            ]
+          }
+        },
+        "provider": {
+          "$ref": "#/$defs/token"
+        },
+        "model": {
+          "$ref": "#/$defs/token"
+        },
+        "reasoning_effort": {
+          "$ref": "#/$defs/token"
+        }
+      }
+    },
+    "adapter": {
+      "$ref": "#/$defs/adapter"
+    },
+    "scenario": {
+      "$ref": "#/$defs/candidateScenario"
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "name"
+      ],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/role"
+        },
+        "name": {
+          "$ref": "#/$defs/token"
+        }
+      }
+    },
+    "persona": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "sha256"
+      ],
+      "properties": {
+        "version": {
+          "$ref": "#/$defs/token"
+        },
+        "sha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "soul_sha256": {
+      "$ref": "#/$defs/digest"
+    },
+    "effective_prompt": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "not": {
+        "pattern": "\\u0000"
+      }
+    },
+    "effective_prompt_sha256": {
+      "$ref": "#/$defs/digest"
+    },
+    "execution_policy": {
+      "$ref": "#/$defs/executionPolicy"
+    }
+  },
+  "$defs": {
+    "token": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+/@-]{0,127}$"
+    },
+    "component": {
+      "type": "string",
+      "pattern": "^(?!\\.{1,2}$)[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "runId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "role": {
+      "enum": [
+        "maintainer",
+        "forge",
+        "guide",
+        "overwatch",
+        "learning_steward"
+      ]
+    },
+    "nonEmptyText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "\\S",
+      "not": {
+        "pattern": "\\u0000"
+      }
+    },
+    "adapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "route_id"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/component"
+        },
+        "route_id": {
+          "$ref": "#/$defs/token"
+        }
+      }
+    },
+    "candidateScenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "role",
+        "surface",
+        "authority_state",
+        "evidence",
+        "prompt"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/token"
+        },
+        "role": {
+          "$ref": "#/$defs/role"
+        },
+        "surface": {
+          "$ref": "#/$defs/token"
+        },
+        "authority_state": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonEmptyText"
+          }
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 10000,
+          "pattern": "\\S",
+          "not": {
+            "pattern": "\\u0000"
+          }
+        }
+      }
+    },
+    "executionPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "fresh_session",
+        "fresh_home",
+        "fresh_hermes_home",
+        "empty_working_directory",
+        "fallback_allowed",
+        "max_retries",
+        "max_output_tokens",
+        "tools",
+        "memory",
+        "skills",
+        "plugins",
+        "mcp_servers",
+        "production_credentials",
+        "hermes_kanban_task",
+        "remaining_total_token_budget"
+      ],
+      "properties": {
+        "version": {
+          "const": "john-lomein.persona-qualification-isolation.v1"
+        },
+        "fresh_session": {
+          "const": true
+        },
+        "fresh_home": {
+          "const": true
+        },
+        "fresh_hermes_home": {
+          "const": true
+        },
+        "empty_working_directory": {
+          "const": true
+        },
+        "fallback_allowed": {
+          "const": false
+        },
+        "max_retries": {
+          "const": 0
+        },
+        "max_output_tokens": {
+          "const": 2000
+        },
+        "tools": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "memory": {
+          "const": false
+        },
+        "skills": {
+          "const": false
+        },
+        "plugins": {
+          "const": false
+        },
+        "mcp_servers": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "production_credentials": {
+          "const": false
+        },
+        "hermes_kanban_task": {
+          "const": false
+        },
+        "remaining_total_token_budget": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000000
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+# Python/test residue
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# Local runtime/operator state
+.clawhip/
+.env
+private/
+state/
+logs/
+runtime-residue/
+*.log
+
+# OS/editor noise
+.DS_Store

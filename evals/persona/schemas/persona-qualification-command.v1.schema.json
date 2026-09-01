@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:john-lomein:schema:persona-qualification-command:v1",
+  "title": "John Lomein persona qualification command descriptor v1",
+  "description": "Operator-supplied fixed-command descriptor accepted by scripts/john-lomein-persona-qualification.py. Filesystem provenance, model-matrix equality, credential availability, and candidate/judge independence are enforced by the runner in addition to this structural schema.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/candidateDescriptor"
+    },
+    {
+      "$ref": "#/$defs/judgeDescriptor"
+    }
+  ],
+  "$defs": {
+    "token": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+/@-]{0,127}$"
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "model",
+        "reasoning_effort"
+      ],
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/token"
+        },
+        "model": {
+          "$ref": "#/$defs/token"
+        },
+        "reasoning_effort": {
+          "$ref": "#/$defs/token"
+        }
+      }
+    },
+    "argv": {
+      "type": "array",
+      "description": "Fixed argv passed directly with shell=false. argv[0] must resolve to an absolute, executable, non-symlink regular file; the runner applies additional provenance checks to absolute arguments.",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096,
+        "not": {
+          "pattern": "\\u0000"
+        }
+      }
+    },
+    "credentialEnvironment": {
+      "type": "array",
+      "description": "Names only, never credential values. At most eight qualification-only variables may be copied from the operator environment.",
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^(?!.*(?:GITHUB|GH_|DISCORD|HERMES|JOHN_LOMEIN|CODEX|SSH|AWS|GOOGLE_APPLICATION_CREDENTIALS))(?=.{1,128}$)[A-Z][A-Z0-9_]*(?:_API_KEY|_ACCESS_TOKEN|_CREDENTIAL)$"
+      }
+    },
+    "candidateDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "id",
+        "route_id",
+        "argv",
+        "credential_env",
+        "models"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "john-lomein.persona-qualification-command.v1"
+        },
+        "kind": {
+          "const": "candidate"
+        },
+        "id": {
+          "$ref": "#/$defs/token"
+        },
+        "route_id": {
+          "$ref": "#/$defs/token"
+        },
+        "argv": {
+          "$ref": "#/$defs/argv"
+        },
+        "credential_env": {
+          "$ref": "#/$defs/credentialEnvironment"
+        },
+        "models": {
+          "type": "array",
+          "description": "Must equal the deployed instance's ordered distinct provider/model/reasoning matrix exactly. Identical primary and fallback tuples appear once while their slots remain bound by the runner.",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/model"
+          }
+        }
+      }
+    },
+    "judgeDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "id",
+        "route_id",
+        "argv",
+        "credential_env",
+        "model"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "john-lomein.persona-qualification-command.v1"
+        },
+        "kind": {
+          "const": "judge"
+        },
+        "id": {
+          "$ref": "#/$defs/token"
+        },
+        "route_id": {
+          "$ref": "#/$defs/token"
+        },
+        "argv": {
+          "$ref": "#/$defs/argv"
+        },
+        "credential_env": {
+          "$ref": "#/$defs/credentialEnvironment"
+        },
+        "model": {
+          "$ref": "#/$defs/model"
+        }
+      }
+    }
+  }
+}

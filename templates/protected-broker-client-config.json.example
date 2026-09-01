@@ -1,0 +1,20 @@
+{
+  "schema_version": "john-lomein.protected-broker-client-config.v1",
+  "broker_id": "john-lomein-protected-example",
+  "broker_uid": 501,
+  "broker_config_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "socket_path": "/private/var/db/john-lomein-broker/run/example/broker.sock",
+  "public_key_path": "/private/etc/john-lomein-broker-public/example.receipt-ed25519.pub.pem",
+  "public_key_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "key_id": "john-lomein-protected-example-ed25519-1",
+  "connect_timeout_seconds": 5,
+  "request_timeout_seconds": 30,
+  "max_response_bytes": 524288,
+  "instance_slug": "example",
+  "repository_full_name": "owner/repository",
+  "repository_id": 123456789,
+  "default_branch": "main",
+  "github_app_id": 12345,
+  "github_app_slug": "john-lomein-protected",
+  "github_installation_id": 67890
+}

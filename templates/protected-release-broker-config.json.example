@@ -1,0 +1,95 @@
+{
+  "schema_version": "john-lomein.protected-release-broker-config.v1",
+  "enabled": false,
+  "broker_id": "john-lomein-protected-release-example",
+  "broker_uid": 501,
+  "broker_private_gid": 504,
+  "transport": {
+    "kind": "unix_socket",
+    "peer_credentials": "os_peer_credentials_v1",
+    "socket_path": "/private/var/db/john-lomein-release-broker/run/example/release-broker.sock",
+    "requester_uid": 502,
+    "submit_gid": 503,
+    "max_request_bytes": 1048576,
+    "request_timeout_seconds": 30
+  },
+  "github_app": {
+    "app_id": 12345,
+    "app_slug": "john-lomein-protected-release",
+    "installation_id": 67890,
+    "private_key_path": "/private/etc/john-lomein-release-broker.d/example.secrets/github-app.pem",
+    "api_base_url": "https://api.github.com"
+  },
+  "owner_assertion": {
+    "issuer": "trusted-owner-gateway",
+    "key_id": "john-lomein-owner-example-ed25519-1",
+    "public_key_path": "/private/etc/john-lomein-release-broker.d/example.secrets/owner-assertion-ed25519.pub.pem",
+    "public_key_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "allowed_actor_ids": [
+      "owner-example"
+    ],
+    "maximum_ttl_seconds": 600,
+    "maximum_clock_skew_seconds": 30
+  },
+  "receipt_signing": {
+    "key_id": "john-lomein-protected-release-example-ed25519-1",
+    "private_key_path": "/private/etc/john-lomein-release-broker.d/example.secrets/receipt-ed25519.pem",
+    "public_key_path": "/private/etc/john-lomein-release-broker-public/example.receipt-ed25519.pub.pem",
+    "public_key_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "state": {
+    "database_path": "/private/var/db/john-lomein-release-broker/state/example/release-broker.sqlite"
+  },
+  "instance": {
+    "slug": "example",
+    "repository": {
+      "id": 123456789,
+      "full_name": "owner/repository",
+      "default_branch": "main"
+    },
+    "policy": {
+      "expected_pr_author_logins": [
+        "john-lomein[bot]"
+      ],
+      "expected_merge_actor_login": "john-lomein-protected-release[bot]",
+      "codex_evidence_author_logins": [
+        "chatgpt-codex-connector[bot]"
+      ],
+      "required_checks": [
+        {
+          "kind": "check_run",
+          "name": "CI / test",
+          "producer_app_id": 15368,
+          "producer_slug": "github-actions",
+          "producer_login": null
+        }
+      ],
+      "forbidden_path_prefixes": [
+        ".github/workflows",
+        ".gitmodules",
+        "CODEOWNERS"
+      ],
+      "require_same_repository_head": true,
+      "require_codex_evidence": true,
+      "reject_unconfigured_failures": true,
+      "maximum_changed_files_per_pr": 300,
+      "maximum_total_changed_files": 300,
+      "minimum_rate_limit_remaining": 100,
+      "maximum_bundle_ttl_seconds": 3600,
+      "maximum_packet_ttl_seconds": 600,
+      "maximum_execution_seconds": 300,
+      "max_prs_per_bundle": 1,
+      "merge_method": "squash",
+      "publish": false,
+      "delete_branch": false
+    },
+    "budgets": {
+      "unique_requests_per_hour": 20,
+      "owner_assertions_per_hour": 10,
+      "bundles_per_day": 5,
+      "mutation_attempts_per_day": 5,
+      "confirmed_merges_per_day": 3,
+      "consecutive_indeterminate_limit": 2
+    }
+  }
+}

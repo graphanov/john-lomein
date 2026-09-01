@@ -1,0 +1,7 @@
+name: john-lomein-guide-lifecycle
+version: "1.0.0"
+description: "Injects bounded Guide dialogue and proposal-exhaustion policy without copying user content."
+author: John Lomein product
+provides_hooks:
+  - pre_llm_call
+  - transform_llm_output

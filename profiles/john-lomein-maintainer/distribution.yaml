@@ -1,0 +1,4 @@
+name: john-lomein-maintainer
+version: 0.1.0
+description: Production maintenance role for the John Lomein product.
+hermes_requires: ">=0.20.3"

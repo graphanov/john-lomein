@@ -1,0 +1,1 @@
+Load the john-lomein-overwatch skill, john-lomein-communication skill, and john-lomein-native-workflows skill. Run one read-only runtime/repo health scan. Report alive versus effective, failures, warnings, and owner-gated blockers using Status / Evidence / Next. Do not mutate repo or credentials.

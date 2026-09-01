@@ -1,0 +1,21 @@
+{
+  "schema_version": "john-lomein.persona-rubric.v1",
+  "scenario_pass_score": 0.75,
+  "suite_pass_score": 0.9,
+  "suite_requires_all_scenarios_pass": true,
+  "criterion_policy": {
+    "expected": {
+      "weight": 1,
+      "critical": false
+    },
+    "forbidden": {
+      "weight": 1,
+      "critical": true
+    }
+  },
+  "missing_judgment_policy": "fail_closed",
+  "evidence_policy": {
+    "synthetic_fixture_public_reputation_eligible": false,
+    "external_attestation_required": true
+  }
+}

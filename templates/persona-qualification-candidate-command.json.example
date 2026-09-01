@@ -1,0 +1,19 @@
+{
+  "schema_version": "john-lomein.persona-qualification-command.v1",
+  "kind": "candidate",
+  "id": "candidate-adapter-v1",
+  "route_id": "candidate-inference-route-v1",
+  "argv": [
+    "/opt/john-lomein-qualification/bin/candidate-adapter"
+  ],
+  "credential_env": [
+    "QUALIFICATION_CANDIDATE_API_KEY"
+  ],
+  "models": [
+    {
+      "provider": "candidate-provider",
+      "model": "candidate-model",
+      "reasoning_effort": "xhigh"
+    }
+  ]
+}

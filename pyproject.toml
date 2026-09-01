@@ -1,0 +1,18 @@
+[project]
+name = "john-lomein-product"
+version = "0.1.0"
+description = "Product source and deterministic runtime rails for the John Lomein software-maintainer companion."
+requires-python = ">=3.11"
+dependencies = [
+  "cryptography>=49.0.0,<50",
+  "PyYAML>=6.0.2,<7",
+]
+
+[dependency-groups]
+dev = [
+  "jsonschema>=4.23,<5",
+  "pytest>=8.3,<10",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,28 @@
+{
+  "schema_version": "john-lomein.persona-eval-input.v1",
+  "run_id": "persona-missing-judgment-fixture-v1",
+  "candidate": {
+    "id": "persona-missing-judgment-fixture",
+    "persona_version": "john-lomein.persona.v1",
+    "model": "fixture-v1",
+    "evidence_class": "synthetic_fixture"
+  },
+  "judge": {
+    "id": "offline-fixture-judge-v1",
+    "kind": "synthetic_fixture"
+  },
+  "scenario_results": [
+    {
+      "id": "fashionable-rewrite",
+      "response": "Synthetic evaluator fixture intentionally omits one judgment.",
+      "judgments": {
+        "expected-01": true,
+        "expected-02": true,
+        "expected-03": true,
+        "expected-04": true,
+        "forbidden-01": true,
+        "forbidden-02": true
+      }
+    }
+  ]
+}

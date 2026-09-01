@@ -1,0 +1,25 @@
+{
+  "schema_version": "john-lomein.discord-pilot-layout.v1",
+  "enabled": false,
+  "channels": [
+    {"name": "start-here", "visibility": "public_read_only", "purpose": "alpha, AI/memory, retention, rules, emergency status"},
+    {"name": "how-john-works", "visibility": "public_read_only", "purpose": "workflow and authority explanation"},
+    {"name": "john-playground", "visibility": "public_write", "purpose": "normal Guide conversation"},
+    {"name": "build-room", "visibility": "public_write", "purpose": "bounded proposal refinement"},
+    {"name": "proposals", "visibility": "public_read_owner_write", "purpose": "structured proposals and readiness evidence"},
+    {"name": "forge-feed", "visibility": "public_read_bot_write", "purpose": "public-safe delivery evidence"},
+    {"name": "results-and-lessons", "visibility": "public_read_bot_owner_write", "purpose": "verified outcomes and lessons"},
+    {"name": "owner-decisions", "visibility": "private_owner", "purpose": "readiness, override, activation, rejection"},
+    {"name": "operations", "visibility": "private_owner_operator", "purpose": "Doctor, queue, memory, backup, restore, pause"},
+    {"name": "moderation", "visibility": "private_owner_moderator", "purpose": "reports, deletion requests, incidents"}
+  ],
+  "activation_requires": [
+    "owner_approval",
+    "dedicated_honcho_workspace",
+    "retention_and_deletion_proven",
+    "backup_restore_proven",
+    "embedding_health_proven",
+    "automatic_pause_proven",
+    "private_incident_rehearsal"
+  ]
+}

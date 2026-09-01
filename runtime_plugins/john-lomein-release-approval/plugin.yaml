@@ -1,0 +1,6 @@
+name: john-lomein-release-approval
+version: "1.0.0"
+description: "Deterministic exact-message bridge to the isolated John Lomein release owner gateway and protected release broker."
+author: John Lomein product
+provides_hooks:
+  - pre_llm_call

@@ -1,0 +1,26 @@
+{
+  "schema_version": "john-lomein.protected-release-broker-client-config.v1",
+  "broker_id": "john-lomein-protected-release-example",
+  "broker_uid": 501,
+  "requester_uid": 502,
+  "submit_gid": 503,
+  "broker_config_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "socket_path": "/private/var/db/john-lomein-release-broker/run/example/release-broker.sock",
+  "receipt_public_key_path": "/private/etc/john-lomein-release-broker-public/example.receipt-ed25519.pub.pem",
+  "receipt_public_key_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "receipt_key_id": "john-lomein-protected-release-example-ed25519-1",
+  "connect_timeout_seconds": 5,
+  "request_timeout_seconds": 30,
+  "max_response_bytes": 1114112,
+  "instance_slug": "example",
+  "repository": {
+    "id": 123456789,
+    "full_name": "owner/repository",
+    "default_branch": "main"
+  },
+  "github_app": {
+    "app_id": 12345,
+    "app_slug": "john-lomein-protected-release",
+    "installation_id": 67890
+  }
+}

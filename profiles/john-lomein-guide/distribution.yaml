@@ -1,0 +1,4 @@
+name: john-lomein-guide
+version: 0.1.0
+description: Public conversation and intake-shaping role for the John Lomein product.
+hermes_requires: ">=0.20.3"

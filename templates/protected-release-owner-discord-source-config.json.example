@@ -1,0 +1,11 @@
+{
+  "schema_version": "john-lomein.release-owner-discord-source-config.v1",
+  "enabled": false,
+  "signer_id": "john-lomein-release-owner-example",
+  "signer_config_sha256": "sha256:0fd87fb0bf248e367e4ac356d27ba2de52feeea98a4e6235aef5e0de61bfa16a",
+  "api_base_url": "https://discord.com/api/v10",
+  "bot_user_id": "5234567890123456\u0037",
+  "bot_token_path": "/private/etc/john-lomein-release-owner-gateway.d/example.secrets/discord-observer-bot.token",
+  "request_timeout_seconds": 10,
+  "maximum_response_bytes": 262144
+}

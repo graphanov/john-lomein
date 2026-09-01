@@ -1,0 +1,17 @@
+{
+  "schema_version": "john-lomein.persona-qualification-command.v1",
+  "kind": "judge",
+  "id": "judge-adapter-v1",
+  "route_id": "judge-inference-route-v1",
+  "argv": [
+    "/opt/john-lomein-qualification/bin/judge-adapter"
+  ],
+  "credential_env": [
+    "QUALIFICATION_JUDGE_API_KEY"
+  ],
+  "model": {
+    "provider": "independent-judge-provider",
+    "model": "independent-judge-model",
+    "reasoning_effort": "high"
+  }
+}

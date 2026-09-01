@@ -1,0 +1,4 @@
+name: john-lomein-overwatch
+version: 0.1.0
+description: Observer, critic, and repair-sentinel role for the John Lomein product.
+hermes_requires: ">=0.20.3"

@@ -1,0 +1,30 @@
+{
+  "schema_version": "john-lomein.honcho-model-benchmark.v1",
+  "execution_enabled": false,
+  "models": [
+    {"role": "baseline", "name": "honcho-memory:3b", "base": "llama3.2:3b"},
+    {"role": "candidate", "name": "honcho-memory:31b", "base": "gemma4:31b"}
+  ],
+  "embedding_model": "nomic-embed-text",
+  "embedding_cap_tokens": 1000,
+  "context_windows": [8192, 16384, 32768],
+  "minimum_cases": 40,
+  "required_case_families": [
+    "fact-recall",
+    "correction",
+    "identity-separation",
+    "privacy-leakage",
+    "temporal-ordering",
+    "long-context",
+    "chunk-retrieval",
+    "deletion-replay"
+  ],
+  "hard_gates": {
+    "privacy_regressions_max": 0,
+    "retention_regressions_max": 0,
+    "deletion_regressions_max": 0,
+    "live_config_changes_max": 0
+  },
+  "owner_approval_required_before_model_run": true,
+  "owner_approval_required_before_live_switch": true
+}

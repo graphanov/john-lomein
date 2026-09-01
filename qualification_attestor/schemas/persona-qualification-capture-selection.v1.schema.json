@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://john-lomein.invalid/schemas/persona-qualification-capture-selection.v1.schema.json",
+  "title": "John Lomein sparse current-run qualification capture selection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "instance_slug",
+    "evidence_uid",
+    "verifier_gid",
+    "source_roots",
+    "path_identities",
+    "role_profiles",
+    "limits",
+    "lifecycle"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "john-lomein.persona-qualification-capture-selection.v1"
+    },
+    "instance_slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$"
+    },
+    "evidence_uid": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "verifier_gid": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "source_roots": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instance_manifest",
+        "runtime",
+        "qualification_public",
+        "qualification_private"
+      ],
+      "properties": {
+        "instance_manifest": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "runtime": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "qualification_public": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "qualification_private": {
+          "$ref": "#/$defs/absolutePath"
+        }
+      }
+    },
+    "path_identities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_home",
+        "checkout_source",
+        "runtime_source",
+        "checkout",
+        "runtime"
+      ],
+      "properties": {
+        "evidence_home": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "checkout_source": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "runtime_source": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "checkout": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "runtime": {
+          "$ref": "#/$defs/absolutePath"
+        }
+      }
+    },
+    "role_profiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maintainer",
+        "forge",
+        "guide",
+        "overwatch",
+        "learning_steward"
+      ],
+      "properties": {
+        "maintainer": {
+          "const": "john-lomein-maintainer"
+        },
+        "forge": {
+          "const": "john-lomein-forge"
+        },
+        "guide": {
+          "const": "john-lomein-guide"
+        },
+        "overwatch": {
+          "const": "john-lomein-overwatch"
+        },
+        "learning_steward": {
+          "const": "john-lomein-learning-steward"
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_files",
+        "max_directories",
+        "max_bytes",
+        "max_file_bytes",
+        "max_depth"
+      ],
+      "properties": {
+        "max_files": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        },
+        "max_directories": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        },
+        "max_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 134217728
+        },
+        "max_file_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16777216
+        },
+        "max_depth": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "retention",
+        "max_capture_slots",
+        "max_orphan_age_seconds"
+      ],
+      "properties": {
+        "retention": {
+          "const": "ephemeral"
+        },
+        "max_capture_slots": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        },
+        "max_orphan_age_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600
+        }
+      }
+    }
+  },
+  "$defs": {
+    "absolutePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^/"
+    }
+  }
+}

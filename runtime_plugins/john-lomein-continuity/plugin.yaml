@@ -1,0 +1,6 @@
+name: john-lomein-continuity
+version: "1.0.0"
+description: "Injects a bounded, privacy-scoped, product-owned continuity capsule into the current user turn."
+author: John Lomein product
+provides_hooks:
+  - pre_llm_call

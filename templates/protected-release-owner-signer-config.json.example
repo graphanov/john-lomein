@@ -1,0 +1,39 @@
+{
+  "schema_version": "john-lomein.release-owner-signer-config.v1",
+  "enabled": false,
+  "signer_id": "john-lomein-release-owner-example",
+  "signer_uid": 505,
+  "signer_gid": 506,
+  "runtime_uid": 502,
+  "issuer": "trusted-owner-gateway",
+  "key_id": "john-lomein-owner-example-ed25519-1",
+  "private_key_path": "/private/etc/john-lomein-release-owner-gateway.d/example.secrets/owner-assertion-ed25519.pem",
+  "public_key_path": "/private/etc/john-lomein-release-owner-gateway.d/example.secrets/owner-assertion-ed25519.pub.pem",
+  "public_key_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "state_directory": "/private/var/db/john-lomein-release-owner-gateway/state/example",
+  "assertion_ttl_seconds": 600,
+  "maximum_event_age_seconds": 600,
+  "maximum_observation_delay_seconds": 120,
+  "maximum_clock_skew_seconds": 30,
+  "instance": {
+    "slug": "example",
+    "repository": {
+      "id": 123456789,
+      "full_name": "owner/repository",
+      "default_branch": "main"
+    }
+  },
+  "discord": {
+    "application_id": "1234567890123456\u0037",
+    "guild_id": "2234567890123456\u0037",
+    "approval_channel_ids": [
+      "3234567890123456\u0037"
+    ],
+    "owner_actors": [
+      {
+        "user_id": "4234567890123456\u0037",
+        "actor_login": "owner-example"
+      }
+    ]
+  }
+}
