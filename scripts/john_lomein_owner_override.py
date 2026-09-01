@@ -669,4 +669,3 @@ def load_verified_owner_overrides(
     finally:
         fcntl.flock(descriptor, fcntl.LOCK_UN)
         os.close(descriptor)
-
