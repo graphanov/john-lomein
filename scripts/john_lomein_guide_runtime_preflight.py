@@ -110,7 +110,10 @@ def verify_guide_runtime(
     if tuple(hooks or ()) != REQUIRED_HOOKS:
         raise ValueError("Guide lifecycle plugin hook contract is incomplete")
 
-    config_path = _safe_regular(profile / "config.yaml", private=True)
+    config_path = _safe_regular(
+        home / "managed-policy" / guide_profile / "config.yaml",
+        private=True,
+    )
     config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     plugins = config.get("plugins") if isinstance(config, Mapping) else None
     enabled = set(plugins.get("enabled") or []) if isinstance(plugins, Mapping) else set()

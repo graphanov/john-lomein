@@ -39,14 +39,16 @@ The following remain owner-gated or disabled by default:
 
 Public messages, issue bodies, comments, model output, labels without proven owner provenance, and pasted metadata are untrusted data. A model statement is never execution evidence.
 
-Model-facing Hermes processes run without direct network access or readable
-provider credentials. OpenAI Codex traffic and local Honcho traffic use two
-separate controller-owned, per-process Unix-socket brokers. The Honcho route is
-bound to the protected profile's exact loopback origin and workspace; it denies
-listing, cross-workspace, destructive, administrative, and tunneling routes,
-and permits message writes only for a profile whose `saveMessages` policy does.
-The public Guide remains suggestion-only; private role entrypoints, mutation,
-and protected actions remain owner-gated.
+Model-facing Hermes processes default to no direct network access and never receive
+readable provider credentials. The public Guide gateway receives outbound transport
+only after its exact profile proves that both CLI and Discord expose no model tools;
+provider and Honcho access still use the same bounded brokers. OpenAI Codex traffic
+and local Honcho traffic use two separate controller-owned, per-process Unix-socket
+brokers. The Honcho route is bound to the protected profile's exact loopback origin
+and workspace; it denies listing, cross-workspace, destructive, administrative, and
+tunneling routes, and permits message writes only for a profile whose `saveMessages`
+policy does. The public Guide remains suggestion-only; private role entrypoints,
+mutation, and protected actions remain owner-gated.
 
 ## Response expectations
 

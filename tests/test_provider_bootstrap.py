@@ -41,6 +41,23 @@ class FakeTimeout:
 
 
 class ProviderBootstrapTest(unittest.TestCase):
+    def test_main_preserves_gateway_module_arguments(self):
+        with mock.patch.object(
+            bootstrap, "install_broker_boundary"
+        ) as install, mock.patch.object(
+            bootstrap.runpy, "run_module"
+        ) as run_module:
+            result = bootstrap.main(
+                ["--module", "hermes_cli.main", "--", "--profile", "john-lomein-guide", "gateway", "run"]
+            )
+        self.assertEqual(result, 0)
+        install.assert_called_once_with()
+        run_module.assert_called_once()
+        self.assertEqual(
+            sys.argv,
+            ["hermes_cli.main", "--profile", "john-lomein-guide", "gateway", "run"],
+        )
+
     def test_honcho_constructor_is_patched_before_plugin_import_and_forces_uds(self):
         provider_path = provider_broker_socket_path()
         honcho_path = honcho_broker_socket_path(provider_path)
@@ -95,7 +112,8 @@ class ProviderBootstrapTest(unittest.TestCase):
             "agent.auxiliary_client": auxiliary,
         }
         environment = {
-            "BOT_HERMES_HOME": "/controller/runtime",
+            "JOHN_LOMEIN_INSTANCE_HERMES_HOME": "/controller/runtime",
+            "HERMES_HOME": "/controller/runtime/profiles/john-lomein-maintainer",
             "JOHN_LOMEIN_PROVIDER_BROKER_SOCKET": str(provider_path),
             "JOHN_LOMEIN_PROVIDER_BROKER_CAPABILITY": "provider-ephemeral-capability",
             "JOHN_LOMEIN_HONCHO_BROKER_SOCKET": str(honcho_path),
@@ -111,6 +129,11 @@ class ProviderBootstrapTest(unittest.TestCase):
                 importlib.reload(bootstrap)
                 self.assertNotIn("plugins.memory.honcho.client", sys.modules)
                 bootstrap.install_broker_boundary()
+                self.assertEqual(
+                    os.environ["OPENAI_API_KEY"],
+                    "provider-ephemeral-capability",
+                )
+                self.assertEqual(os.environ["OPENAI_BASE_URL"], "http://localhost")
                 self.assertNotIn("plugins.memory.honcho.client", sys.modules)
 
                 client = fake_honcho.Honcho(

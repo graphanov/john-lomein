@@ -83,6 +83,48 @@ def test_contract_rejects_shared_or_unpinned_public_memory_targets(
         honcho_settings(manifest, instance_slug="public-pilot")
 
 
+def test_provision_configures_the_empty_embedding_schema(tmp_path):
+    from john_lomein_public_honcho_service import _configure_embedding_schema
+
+    runner = mock.Mock()
+    _configure_embedding_schema(
+        tmp_path,
+        uv_binary="/opt/homebrew/bin/uv",
+        runner=runner,
+    )
+
+    runner.assert_called_once_with(
+        [
+            "/opt/homebrew/bin/uv",
+            "run",
+            "--frozen",
+            "python",
+            "scripts/configure_embeddings.py",
+            "--yes",
+        ],
+        cwd=str(tmp_path),
+        check=True,
+        timeout=600,
+    )
+
+
+def test_supervisor_python_uses_the_dedicated_service_venv(tmp_path):
+    from john_lomein_public_honcho_service import _supervisor_python_path
+
+    server = tmp_path / "server"
+    interpreter = server / ".venv" / "bin" / "python"
+    interpreter.parent.mkdir(parents=True)
+    base = tmp_path / "base-python"
+    base.write_text("runtime", encoding="utf-8")
+    base.chmod(0o700)
+    interpreter.symlink_to(base)
+
+    selected = _supervisor_python_path({"server_root": str(server)})
+
+    assert selected == interpreter.absolute()
+    assert selected != interpreter.resolve()
+
+
 def test_launchagent_can_only_execute_the_product_supervisor(tmp_path):
     from john_lomein_public_honcho_service import build_supervisor_plist
 
@@ -94,6 +136,7 @@ def test_launchagent_can_only_execute_the_product_supervisor(tmp_path):
         runtime_home=runtime,
         instance_slug="public-pilot",
         python="/usr/bin/python3",
+        uv="/opt/homebrew/bin/uv",
         supervisor_script=script,
     )
     encoded = plistlib.dumps(payload)
@@ -108,6 +151,7 @@ def test_launchagent_can_only_execute_the_product_supervisor(tmp_path):
         str(manifest),
     ]
     assert decoded["KeepAlive"] is True
+    assert decoded["EnvironmentVariables"]["JOHN_LOMEIN_UV"] == "/opt/homebrew/bin/uv"
     serialized = json.dumps(decoded, sort_keys=True)
     assert "ai.hermes.honcho" not in serialized
     assert "fastapi" not in serialized

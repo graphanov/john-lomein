@@ -277,10 +277,27 @@ def create_server(
 
 
 def _runtime_home(env: Mapping[str, str]) -> Path:
-    raw = str(env.get("BOT_HERMES_HOME") or "").strip()
-    if not raw:
-        raise ProviderBrokerError("provider_broker_runtime_missing")
-    home = _absolute_path(Path(raw), label="provider_broker_runtime")
+    controller_values = [
+        str(env.get(name) or "").strip()
+        for name in (
+            "BOT_HERMES_HOME",
+            "JOHN_LOMEIN_INSTANCE_HERMES_HOME",
+        )
+        if str(env.get(name) or "").strip()
+    ]
+    if controller_values:
+        homes = [
+            _absolute_path(Path(value), label="provider_broker_runtime")
+            for value in controller_values
+        ]
+        if any(home != homes[0] for home in homes[1:]):
+            raise ProviderBrokerError("provider_broker_runtime_mismatch")
+        home = homes[0]
+    else:
+        raw = str(env.get("HERMES_HOME") or "").strip()
+        if not raw:
+            raise ProviderBrokerError("provider_broker_runtime_missing")
+        home = _absolute_path(Path(raw), label="provider_broker_runtime")
     info = home.lstat()
     if (
         home.is_symlink()

@@ -618,7 +618,10 @@ def check_launchagent_model_environment(label,profile,H,*,require_isolation=Fals
             'gateway_lock_contract': lock_ok,
             'isolation_entrypoint': str(H/'scripts'/'john_lomein_model_isolation.py') in args,
             'isolated_python': '-I' in args,
-            'profile_scope': args.count(profile)==2,
+            'profile_scope': args.count(profile)==1 and any(
+                args[index : index + 2] == ['--profile', profile]
+                for index in range(len(args) - 1)
+            ),
         })
     failed=[name for name,passed in checks.items() if not passed]
     ok=not failed
@@ -1142,7 +1145,7 @@ def main():
     else:
         note('FAIL',f'managed checkout missing: {local}')
     required_enabled_private={'web','terminal','file','skills','todo'}
-    required_enabled_guide={'web','skills','todo'}
+    required_enabled_guide=set()
     high_risk={'browser','code_execution','vision','video','image_gen','video_gen','x_search','moa','tts','clarify','delegation','cronjob','homeassistant','spotify','yuanbao','computer_use'}
     omh_catalog={}
     if omh_enabled(bot):
@@ -1346,7 +1349,13 @@ def main():
             note('OK' if not (term.get('dangerous_command_permanent_allowlist') or []) else 'WARN', f'{profile} dangerous-command permanent allowlist empty')
             enabled,disabled=parse_tools(profile,H)
             req=required_enabled_guide if role=='guide' else required_enabled_private
-            note('OK' if req <= enabled else 'FAIL', f'{profile} required toolsets enabled' if req <= enabled else f'{profile} missing enabled toolsets: {sorted(req-enabled)}')
+            if role == 'guide':
+                note(
+                    'OK' if not enabled else 'FAIL',
+                    f'{profile} public Guide exposes no model tools' if not enabled else f'{profile} unexpected enabled toolsets',
+                )
+            else:
+                note('OK' if req <= enabled else 'FAIL', f'{profile} required toolsets enabled')
             check_model_memory_toolsets(profile,disabled)
             known_toolsets = enabled | disabled
             # Hermes installations evolve: older product rails included toolsets
@@ -1368,9 +1377,11 @@ def main():
             else:
                 note('OK' if profile_has_gh_auth else 'WARN', f'{profile} profile-local gh auth works' if profile_has_gh_auth else f'{profile} profile-local gh auth missing')
     guide_profile=role_profiles['guide']
+    guide_inventory_env=dict(env)
+    guide_inventory_env['HERMES_MANAGED_DIR']=str(managed_policy_directory(H,guide_profile))
     c,o,e=sh(
         ['hermes','-p',guide_profile,'plugins','list','--json'],
-        env=env,
+        env=guide_inventory_env,
         timeout=45,
     )
     try:
@@ -1900,7 +1911,14 @@ def main():
         except Exception:
             note('WARN',f'release executor dry-run output unreadable: {eo[:220]}')
     else:
-        note('FAIL',f'release executor dry-run failed: {ee or eo}')
+        executor_error = ee or eo
+        if (
+            not effective_authority['protected_release']
+            and 'release bundle not found' in executor_error
+        ):
+            note('OK','release executor is dormant without a protected release bundle')
+        else:
+            note('FAIL',f'release executor dry-run failed: {executor_error}')
     pc,po,pe=sh([runtime_python,str(H/'scripts/john-lomein-release-approve.py'),'status'],env=env,timeout=45)
     try:
         protected_status=json.loads(po or '{}')

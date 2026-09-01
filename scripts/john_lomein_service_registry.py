@@ -633,13 +633,14 @@ def _service_command_identity(
         if kind == "guide"
         else "john-lomein-maintainer"
     )
-    if kind in {"guide", "scheduler"} and len(program_arguments) in {13, 14}:
+    if kind in {"guide", "scheduler"} and len(program_arguments) in {11, 12, 13, 14}:
         expected_wrapper = (
             runtime_path / "scripts" / "john_lomein_model_isolation.py"
         )
         outer_executable = canonical_path(program_arguments[0])
         inner_executable = canonical_path(program_arguments[5])
-        isolated_python = len(program_arguments) == 14
+        isolated_python = len(program_arguments) in {12, 14}
+        legacy_inner_profile = len(program_arguments) in {13, 14}
         expected_inner = [
             "--profile",
             profile,
@@ -648,8 +649,7 @@ def _service_command_identity(
             *(["-I"] if isolated_python else []),
             "-m",
             "hermes_cli.main",
-            "--profile",
-            profile,
+            *(["--profile", profile] if legacy_inner_profile else []),
             "gateway",
             "run",
             "--replace",

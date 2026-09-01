@@ -43,18 +43,16 @@ def test_runtime_preflight_requires_exact_profile_binding_discovery_and_workspac
     (profile / "plugins").mkdir(parents=True)
     (profile / "plugins" / "john-lomein-guide-lifecycle").symlink_to(plugin)
     config_path = profile / "config.yaml"
-    config_path.write_text(
-        yaml.safe_dump(
-            {
-                "plugins": {
-                    "enabled": ["john-lomein-guide-lifecycle"],
-                    "disabled": [],
-                }
-            }
-        ),
+    config_path.write_text("{}\n", encoding="utf-8")
+    config_path.chmod(0o600)
+    managed = runtime / "managed-policy" / "john-lomein-guide"
+    managed.mkdir(parents=True)
+    managed_config = managed / "config.yaml"
+    managed_config.write_text(
+        "plugins:\n  enabled:\n  - john-lomein-guide-lifecycle\n  disabled: []\n",
         encoding="utf-8",
     )
-    config_path.chmod(0o600)
+    managed_config.chmod(0o600)
     payload = profile_honcho_config(
         manifest(runtime),
         instance_slug="pilot",

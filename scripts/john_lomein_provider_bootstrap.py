@@ -54,7 +54,14 @@ def _broker_values() -> tuple[str, str, str, str, str]:
     workspace = str(
         os.environ.get("JOHN_LOMEIN_HONCHO_BROKER_WORKSPACE") or ""
     )
-    home_raw = str(os.environ.get("BOT_HERMES_HOME") or "")
+    controller_homes = [
+        str(os.environ.get(name) or "")
+        for name in ("BOT_HERMES_HOME", "JOHN_LOMEIN_INSTANCE_HERMES_HOME")
+        if str(os.environ.get(name) or "")
+    ]
+    if len(set(controller_homes)) > 1:
+        raise ProviderBootstrapError("provider_bootstrap_runtime_mismatch")
+    home_raw = controller_homes[0] if controller_homes else ""
     if not raw_path or not honcho_raw_path or not workspace or not home_raw:
         raise ProviderBootstrapError("provider_bootstrap_binding_missing")
     capability = _capability("JOHN_LOMEIN_PROVIDER_BROKER_CAPABILITY")
@@ -170,8 +177,20 @@ def _install_honcho_boundary(
     honcho_class.__init__ = brokered_init
 
 
+def _install_gateway_runtime_boundary() -> None:
+    if os.environ.get("JOHN_LOMEIN_GATEWAY_PROCESS") != "1":
+        return
+    root = Path(os.environ.get("TMPDIR") or "")
+    if not root.is_absolute() or root.is_symlink() or not root.is_dir():
+        raise ProviderBootstrapError("provider_bootstrap_tmp_invalid")
+    import gateway.shutdown_watchdog as watchdog
+    def short_tick_path(home=None, pid=None):
+        return root / f"gt-{pid or os.getpid()}.sock"
+    watchdog.get_loop_tick_socket_path = short_tick_path
+
+
 def install_broker_boundary() -> None:
-    """Patch Hermes' two provider chokepoints before its CLI imports them."""
+    """Patch Hermes' provider chokepoints before runtime imports."""
 
     (
         socket_path,
@@ -180,6 +199,12 @@ def install_broker_boundary() -> None:
         honcho_capability,
         honcho_workspace,
     ) = _broker_values()
+    # Advertise only the per-process capability so Hermes' early provider
+    # preflight succeeds without probing denied credential files. Runtime client
+    # creation below still forces the UDS transport and broker origin.
+    os.environ["OPENAI_API_KEY"] = capability
+    os.environ["OPENAI_BASE_URL"] = BROKER_BASE_URL
+    _install_gateway_runtime_boundary()
     import httpx
 
     _install_honcho_boundary(
@@ -268,18 +293,33 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args, remainder = _parser().parse_known_args(
-        list(sys.argv[1:] if argv is None else argv)
-    )
-    install_broker_boundary()
-    if args.module:
-        sys.argv = [args.module, *remainder]
-        runpy.run_module(args.module, run_name="__main__", alter_sys=True)
-    elif args.entrypoint:
-        sys.argv = [args.entrypoint, *remainder]
-        runpy.run_path(args.entrypoint, run_name="__main__")
+    items = list(sys.argv[1:] if argv is None else argv)
+    module: str | None = None
+    entrypoint: str | None = None
+    if items[:1] == ["--module"]:
+        if len(items) < 2:
+            raise ProviderBootstrapError("provider_bootstrap_entrypoint_missing")
+        module = items[1]
+        remainder = items[2:]
+    elif items:
+        entrypoint = items[0]
+        remainder = items[1:]
     else:
         raise ProviderBootstrapError("provider_bootstrap_entrypoint_missing")
+    if remainder[:1] == ["--"]:
+        remainder = remainder[1:]
+    if any(
+        remainder[index : index + 2] == ["gateway", "run"]
+        for index in range(len(remainder) - 1)
+    ):
+        os.environ["JOHN_LOMEIN_GATEWAY_PROCESS"] = "1"
+    install_broker_boundary()
+    if module:
+        sys.argv = [module, *remainder]
+        runpy.run_module(module, run_name="__main__", alter_sys=True)
+    elif entrypoint:
+        sys.argv = [entrypoint, *remainder]
+        runpy.run_path(entrypoint, run_name="__main__")
     return 0
 
 

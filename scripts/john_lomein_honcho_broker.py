@@ -134,10 +134,24 @@ def load_binding(env: Mapping[str, str], profile: str) -> HonchoBinding:
     role = roles.get(profile)
     if role is None:
         raise HonchoBrokerError("honcho_broker_profile_invalid")
-    runtime_raw = str(env.get("BOT_HERMES_HOME") or "").strip()
-    if not runtime_raw:
-        raise HonchoBrokerError("honcho_broker_runtime_missing")
-    runtime = _absolute(Path(runtime_raw), label="honcho_broker_runtime")
+    controller_values = [
+        str(env.get(name) or "").strip()
+        for name in ("BOT_HERMES_HOME", "JOHN_LOMEIN_INSTANCE_HERMES_HOME")
+        if str(env.get(name) or "").strip()
+    ]
+    if controller_values:
+        roots = [
+            _absolute(Path(value), label="honcho_broker_runtime")
+            for value in controller_values
+        ]
+        if any(root != roots[0] for root in roots[1:]):
+            raise HonchoBrokerError("honcho_broker_runtime_mismatch")
+        runtime = roots[0]
+    else:
+        runtime_raw = str(env.get("HERMES_HOME") or "").strip()
+        if not runtime_raw:
+            raise HonchoBrokerError("honcho_broker_runtime_missing")
+        runtime = _absolute(Path(runtime_raw), label="honcho_broker_runtime")
     config_path = runtime / "profiles" / profile / "honcho.json"
     _safe_regular_file(config_path)
     try:

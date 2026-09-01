@@ -26,7 +26,7 @@ NO_MCP_SENTINEL = "no_mcp"
 PROFILE_MANAGED_POLICY_DIRNAME = "managed-policy"
 
 _PRIVATE_MODEL_TOOLSETS = ("file", "skills", "terminal", "todo", "web")
-_GUIDE_MODEL_TOOLSETS = ("skills", "todo", "web")
+_GUIDE_MODEL_TOOLSETS: tuple[str, ...] = ()
 _MEMORY_ALIASES = frozenset(
     {"memory", "session_search", "mnemosyne", "mcp-mnemosyne"}
 )
@@ -84,20 +84,16 @@ def _sanitize_platform_toolsets(
                 dict.fromkeys([*clean, NO_MCP_SENTINEL])
             )
 
-    # Every model turn currently resolves through the CLI platform.  The Guide
-    # additionally serves public Discord turns.  An explicit no_mcp sentinel
-    # prevents future/stale server entries from being auto-added by Hermes.
-    cli = platform_toolsets.get("cli", [])
-    platform_toolsets["cli"] = list(
-        dict.fromkeys([*cli, NO_MCP_SENTINEL])
-    )
+    # Every model turn currently resolves through the CLI platform. The public
+    # Guide has no model-facing tools; its trusted gateway process alone owns
+    # Discord transport and the model remains behind filesystem/provider
+    # boundaries.
     if role == "guide":
-        discord = platform_toolsets.get("discord", [])
-        if not discord:
-            discord = list(_GUIDE_MODEL_TOOLSETS)
-        platform_toolsets["discord"] = list(
-            dict.fromkeys([*discord, NO_MCP_SENTINEL])
-        )
+        platform_toolsets["cli"] = [NO_MCP_SENTINEL]
+        platform_toolsets["discord"] = [NO_MCP_SENTINEL]
+    else:
+        cli = platform_toolsets.get("cli", [])
+        platform_toolsets["cli"] = list(dict.fromkeys([*cli, NO_MCP_SENTINEL]))
     config["platform_toolsets"] = platform_toolsets
 
 
@@ -336,7 +332,11 @@ def agent_memory_boundary_errors(
             required_platforms.add("discord")
         for platform in sorted(required_platforms):
             entries = platform_toolsets.get(platform)
-            if not isinstance(entries, list) or NO_MCP_SENTINEL not in {
+            if role == "guide" and entries != [NO_MCP_SENTINEL]:
+                errors.append(
+                    f"public Guide platform_toolsets.{platform} must contain no model tools"
+                )
+            elif not isinstance(entries, list) or NO_MCP_SENTINEL not in {
                 str(entry) for entry in entries
             }:
                 errors.append(

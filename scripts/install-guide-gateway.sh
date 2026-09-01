@@ -49,6 +49,16 @@ if [ -z "${JOHN_LOMEIN_SERVICE_LOCK_FD:-}" ]; then
 fi
 "${PRODUCT_PYTHON[@]}" "$SERVICE_REGISTRY" assert-locked
 eval "$("${PRODUCT_PYTHON[@]}" "$READ_ENV" "$1")"
+INSTANCE_ENV="$BOT_HERMES_HOME/scripts/john-lomein-instance.env"
+if [ -L "$INSTANCE_ENV" ] || [ ! -f "$INSTANCE_ENV" ]; then
+  echo "generated instance environment is missing or unsafe" >&2
+  exit 2
+fi
+if [ "$(stat -f '%u' "$INSTANCE_ENV")" != "$(id -u)" ] || [ "$(stat -f '%Lp' "$INSTANCE_ENV")" != "600" ]; then
+  echo "generated instance environment owner or mode is unsafe" >&2
+  exit 2
+fi
+. "$BOT_HERMES_HOME/scripts/john-lomein-instance.env"
 . "$BOT_HERMES_HOME/scripts/john-lomein-auth-env.sh"
 UID_NUM="$(id -u)"
 AGENTS_DIR="$HOME/Library/LaunchAgents"
@@ -234,7 +244,7 @@ import os, plistlib, sys, tempfile
 plist,label,py,profile,H,managed_dir,venv,real_home,auth_authority_home,gateway_lock_dir,repo,owner_approvers,trust_public_key_sha256,owner_ids,collaborator_ids,isolation,model_provider,fallback_provider=sys.argv[1:]
 obj={
   'Label': label,
-  'ProgramArguments': [py, f'{H}/scripts/john_lomein_model_isolation.py', '--profile', profile, '--', py, '-I', '-m', 'hermes_cli.main', '--profile', profile, 'gateway', 'run', '--replace'],
+  'ProgramArguments': [py, f'{H}/scripts/john_lomein_model_isolation.py', '--profile', profile, '--', py, '-I', '-m', 'hermes_cli.main', 'gateway', 'run', '--replace'],
   'WorkingDirectory': f'{H}/profiles/{profile}',
   'EnvironmentVariables': {
     'HERMES_HOME': H,
@@ -351,10 +361,22 @@ while time.monotonic() < deadline:
     pid = int(pid_match.group(1)) if pid_match else 0
     lock = safe_json(profile / "gateway.lock")
     state = safe_json(profile / "gateway_state.json")
+    gateway_pid = lock.get("pid") if isinstance(lock.get("pid"), int) else 0
+    child_parent = 0
+    if gateway_pid > 0:
+        observed_parent = subprocess.run(
+            ["/bin/ps", "-o", "ppid=", "-p", str(gateway_pid)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if observed_parent.returncode == 0 and observed_parent.stdout.strip().isdigit():
+            child_parent = int(observed_parent.stdout.strip())
     pid_agrees = (
         pid > 0
-        and lock.get("pid") == pid
-        and state.get("pid") == pid
+        and state.get("pid") == gateway_pid
+        and gateway_pid > 0
+        and (gateway_pid == pid or child_parent == pid)
         and state.get("gateway_state") == "running"
     )
     new_errors = ""

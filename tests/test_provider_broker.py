@@ -82,6 +82,20 @@ def unix_http_request(path: Path, request: bytes) -> bytes:
 
 
 class ProviderBrokerTest(unittest.TestCase):
+    def test_runtime_home_accepts_the_exported_instance_home(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp) / "runtime"
+            runtime.mkdir(mode=0o700)
+            profile = runtime / "profiles" / "john-lomein-maintainer"
+            profile.mkdir(parents=True, mode=0o700)
+            selected = broker._runtime_home(
+                {
+                    "JOHN_LOMEIN_INSTANCE_HERMES_HOME": str(runtime),
+                    "HERMES_HOME": str(profile),
+                }
+            )
+            self.assertEqual(selected, runtime)
+
     def test_broker_forwards_only_codex_route_and_owns_real_authorization(self):
         with tempfile.TemporaryDirectory() as tmp:
             socket_path = Path(tmp) / "provider.sock"

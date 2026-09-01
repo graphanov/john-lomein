@@ -390,6 +390,10 @@ class ProductAssetsTest(unittest.TestCase):
         )
         self.assertIn("'HERMES_HONCHO_HOST': f'hermes_{profile}'", guide)
         self.assertIn(
+            '. "$BOT_HERMES_HOME/scripts/john-lomein-instance.env"',
+            guide,
+        )
+        self.assertIn(
             "time.monotonic() - stable_since >= 7",
             guide,
         )

@@ -25,6 +25,7 @@ from pathlib import Path
 GATEWAY_LOCK_RELATIVE_PARTS = (".local", "state", "hermes", "gateway-locks")
 DIRECTORY_MODE = 0o700
 LOCK_FILE_MODE = 0o600
+RUNTIME_LOCK_FILE_MODES = frozenset({0o600, 0o700})
 MAX_LOCK_ENTRIES = 4096
 
 
@@ -269,7 +270,8 @@ def _validate_or_prepare_entry(
                 after = os.fstat(entry_fd)
             except OSError:
                 raise _fail("gateway_lock_entry_mode_failed") from None
-        if stat.S_IMODE(after.st_mode) != LOCK_FILE_MODE:
+        allowed_modes = {LOCK_FILE_MODE} if prepare else RUNTIME_LOCK_FILE_MODES
+        if stat.S_IMODE(after.st_mode) not in allowed_modes:
             raise _fail("gateway_lock_entry_mode_unsafe")
     finally:
         os.close(entry_fd)

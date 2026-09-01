@@ -129,9 +129,9 @@ class ProfileMemoryContractTest(unittest.TestCase):
                     config["platform_toolsets"]["cli"],
                 )
                 if role == "guide":
-                    self.assertIn(
-                        NO_MCP_SENTINEL,
+                    self.assertEqual(
                         config["platform_toolsets"]["discord"],
+                        [NO_MCP_SENTINEL],
                     )
                 self.assertEqual(config["model"], {"provider": "fixture"})
                 self.assertEqual(agent_memory_boundary_errors(config, role), [])

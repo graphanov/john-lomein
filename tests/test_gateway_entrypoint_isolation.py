@@ -167,8 +167,6 @@ class GatewayEntrypointIsolationTest(unittest.TestCase):
                         "-I",
                         "-m",
                         "hermes_cli.main",
-                        "--profile",
-                        profile,
                         "gateway",
                         "run",
                         "--replace",

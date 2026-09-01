@@ -22,12 +22,14 @@ if str(SCRIPTS) not in sys.path:
 from john_lomein_manifest_contract import (  # noqa: E402
     model_memory_isolation_mode,
 )
+from john_lomein_memory_contract import apply_agent_memory_boundary  # noqa: E402
 from john_lomein_honcho_broker import (  # noqa: E402
     HonchoBinding,
     create_server as create_honcho_server,
 )
 from john_lomein_model_isolation import (  # noqa: E402
     IsolationError,
+    _model_working_directory,
     darwin_policy,
     honcho_broker_socket_path,
     isolated_command,
@@ -176,6 +178,53 @@ class ModelMemoryIsolationTest(unittest.TestCase):
             binding.unlink()
         binding.symlink_to(runtime_plugin, target_is_directory=True)
         return binding
+
+    def test_model_working_directory_prefers_the_public_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = self.fixture(Path(tmp))
+            self.assertEqual(
+                _model_working_directory(env),
+                Path(os.path.abspath(env["BOT_LOCAL"])),
+            )
+
+    def test_public_guide_gateway_network_requires_a_no_tool_profile(self):
+        import yaml
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            env = self.fixture(root)
+            profile = Path(env["BOT_HERMES_HOME"]) / "profiles" / "john-lomein-guide"
+            config: dict = {}
+            apply_agent_memory_boundary(config, "guide")
+            (profile / "config.yaml").write_text(
+                yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
+            )
+            command = isolated_command(
+                env,
+                [sys.executable, "-m", "hermes_cli.main", "gateway", "run"],
+                profile="john-lomein-guide",
+                system="Darwin",
+                which=lambda name, path=None: "/usr/bin/sandbox-exec",
+            )
+            policy = next(item for item in command if item.startswith("(version 1)"))
+            self.assertIn("(allow network-outbound)", policy)
+            self.assertIn(
+                f'  (literal "{Path(env["BOT_HERMES_HOME"]).resolve()}")',
+                policy,
+            )
+            config["platform_toolsets"]["discord"] = ["web", "no_mcp"]
+            (profile / "config.yaml").write_text(
+                yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(
+                IsolationError, "model_isolation_guide_tool_contract_invalid"
+            ):
+                isolated_command(
+                    env,
+                    [sys.executable, "-m", "hermes_cli.main", "gateway", "run"],
+                    profile="john-lomein-guide",
+                    system="Darwin",
+                    which=lambda name, path=None: "/usr/bin/sandbox-exec",
+                )
 
     def test_manifest_requires_boundary_when_learning_is_enabled(self):
         self.assertEqual(model_memory_isolation_mode({}), "required")
@@ -1205,7 +1254,10 @@ class ModelMemoryIsolationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             env = self.fixture(root)
-            bin_dir = root / "venv" / "bin"
+            # Exercise the real deployment topology: Hermes' interpreter and
+            # venv live below the owner home that Seatbelt denies by default.
+            env["HERMES_REAL_HOME"] = str(root)
+            bin_dir = root / ".hermes" / "hermes-agent" / "venv" / "bin"
             bin_dir.mkdir(parents=True)
             hermes = bin_dir / "hermes"
             hermes.write_text(

@@ -104,17 +104,22 @@ class ServiceRegistryTest(unittest.TestCase):
             or label.endswith("-scheduler")
         ):
             assert profile is not None
+            inner_arguments = [
+                arguments[0],
+                "-I",
+                "-m",
+                "hermes_cli.main",
+                "gateway",
+                "run",
+                "--replace",
+            ]
             arguments = [
                 "/usr/bin/python3",
-                str(
-                    runtime_home
-                    / "scripts"
-                    / "john_lomein_model_isolation.py"
-                ),
+                str(runtime_home / "scripts" / "john_lomein_model_isolation.py"),
                 "--profile",
                 profile,
                 "--",
-                *arguments,
+                *inner_arguments,
             ]
         with path.open("wb") as handle:
             plistlib.dump(
@@ -152,17 +157,22 @@ class ServiceRegistryTest(unittest.TestCase):
             "--replace",
         ]
         if isolated:
+            inner_arguments = [
+                arguments[0],
+                "-I",
+                "-m",
+                "hermes_cli.main",
+                "gateway",
+                "run",
+                "--replace",
+            ]
             arguments = [
                 "/usr/bin/python3",
-                str(
-                    runtime_home
-                    / "scripts"
-                    / "john_lomein_model_isolation.py"
-                ),
+                str(runtime_home / "scripts" / "john_lomein_model_isolation.py"),
                 "--profile",
                 profile,
                 "--",
-                *arguments,
+                *inner_arguments,
             ]
         lines = [
             "program = /usr/bin/python3",
@@ -678,8 +688,6 @@ class ServiceRegistryTest(unittest.TestCase):
             "-I",
             "-m",
             "hermes_cli.main",
-            "--profile",
-            profile,
             "gateway",
             "run",
             "--replace",

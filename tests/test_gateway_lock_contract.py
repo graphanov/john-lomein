@@ -72,6 +72,10 @@ class GatewayLockContractTest(unittest.TestCase):
                 self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o755)
             self.assertEqual(stat.S_IMODE(expected.stat().st_mode), 0o700)
             self.assertEqual(validate_gateway_lock_root(home), expected)
+            os.chmod(lock, 0o700)
+            self.assertEqual(validate_gateway_lock_root(home), expected)
+            self.assertEqual(prepare_gateway_lock_root(home), expected)
+            self.assertEqual(stat.S_IMODE(lock.stat().st_mode), 0o600)
 
     def test_prepare_creates_missing_tree(self):
         with tempfile.TemporaryDirectory() as tmp:

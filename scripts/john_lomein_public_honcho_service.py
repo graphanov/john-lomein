@@ -13,6 +13,7 @@ import json
 import os
 import plistlib
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -82,6 +83,7 @@ def build_supervisor_plist(
     runtime_home: Path,
     instance_slug: str,
     python: str,
+    uv: str,
     supervisor_script: Path,
 ) -> dict[str, Any]:
     label = public_supervisor_label(instance_slug)
@@ -100,6 +102,7 @@ def build_supervisor_plist(
         ],
         "WorkingDirectory": str(runtime),
         "EnvironmentVariables": {
+            "JOHN_LOMEIN_UV": str(uv),
             "PYTHONUNBUFFERED": "1",
             "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
         },
@@ -480,6 +483,27 @@ def _write_runtime_configuration(settings: Mapping[str, Any]) -> Path:
     return redis_root / "redis.conf"
 
 
+def _configure_embedding_schema(
+    server_root: Path,
+    *,
+    uv_binary: str,
+    runner: Callable[..., Any] = subprocess.run,
+) -> None:
+    runner(
+        [
+            str(uv_binary),
+            "run",
+            "--frozen",
+            "python",
+            "scripts/configure_embeddings.py",
+            "--yes",
+        ],
+        cwd=str(Path(server_root).expanduser().resolve()),
+        check=True,
+        timeout=600,
+    )
+
+
 def provision_public_service(manifest_path: Path) -> dict[str, Any]:
     manifest, settings = _load_manifest(manifest_path)
     runtime_value = str((manifest.get("runtime") or {}).get("hermes_home") or "")
@@ -498,11 +522,19 @@ def provision_public_service(manifest_path: Path) -> dict[str, Any]:
             check=True,
             timeout=60,
         )
+    uv_value = shutil.which("uv")
+    if not uv_value:
+        raise ValueError("public Honcho uv is unavailable")
+    uv_binary = str(Path(uv_value).expanduser().resolve())
     subprocess.run(
-        ["uv", "run", "--frozen", "alembic", "upgrade", "head"],
+        [uv_binary, "run", "--frozen", "alembic", "upgrade", "head"],
         cwd=str(settings["server_root"]),
         check=True,
         timeout=600,
+    )
+    _configure_embedding_schema(
+        Path(str(settings["server_root"])),
+        uv_binary=uv_binary,
     )
     database_identity = assert_dedicated_database(database, str(settings["workspace"]))
     for directory in (
@@ -526,6 +558,19 @@ def provision_public_service(manifest_path: Path) -> dict[str, Any]:
     return receipt
 
 
+def _supervisor_python_path(settings: Mapping[str, Any]) -> Path:
+    server_value = str(settings.get("server_root") or "")
+    server_root = Path(server_value).expanduser()
+    if not server_value or not server_root.is_absolute():
+        raise ValueError("public Honcho server root is invalid")
+    interpreter = Path(
+        os.path.abspath(os.fspath(server_root / ".venv" / "bin" / "python"))
+    )
+    if not interpreter.is_file() or not os.access(interpreter, os.X_OK):
+        raise ValueError("public Honcho supervisor Python is invalid")
+    return interpreter
+
+
 def install_public_service(manifest_path: Path) -> dict[str, Any]:
     manifest_path = Path(manifest_path).expanduser().resolve()
     manifest, settings = _load_manifest(manifest_path)
@@ -536,16 +581,19 @@ def install_public_service(manifest_path: Path) -> dict[str, Any]:
     runtime = Path(runtime_value).expanduser().resolve()
     slug = str((manifest.get("instance") or {}).get("slug") or "")
     script = runtime / "scripts" / Path(__file__).name
-    supervisor_python = Path(
-        os.environ.get("HERMES_PYTHON") or sys.executable
-    ).expanduser()
-    if not supervisor_python.is_absolute() or not supervisor_python.is_file():
-        raise ValueError("public Honcho supervisor Python is invalid")
+    supervisor_python = _supervisor_python_path(settings)
+    uv_value = shutil.which("uv")
+    if not uv_value:
+        raise ValueError("public Honcho supervisor uv is unavailable")
+    uv_binary = Path(uv_value).expanduser().resolve()
+    if not uv_binary.is_file() or not os.access(uv_binary, os.X_OK):
+        raise ValueError("public Honcho supervisor uv is invalid")
     plist = build_supervisor_plist(
         manifest_path=manifest_path,
         runtime_home=runtime,
         instance_slug=slug,
-        python=str(supervisor_python.resolve()),
+        python=str(supervisor_python),
+        uv=str(uv_binary),
         supervisor_script=script,
     )
     label = str(settings["supervisor_label"])
@@ -690,6 +738,17 @@ def _start_verified_dedicated_redis(
         raise
 
 
+def _supervisor_uv_binary() -> str:
+    value = str(os.environ.get("JOHN_LOMEIN_UV") or "")
+    binary = Path(value).expanduser()
+    if not value or not binary.is_absolute():
+        raise FileNotFoundError("public Honcho supervisor uv is unavailable")
+    binary = binary.resolve()
+    if not binary.is_file() or not os.access(binary, os.X_OK):
+        raise FileNotFoundError("public Honcho supervisor uv is unavailable")
+    return str(binary)
+
+
 def supervise_public_service(manifest_path: Path) -> int:
     manifest_path = Path(manifest_path).expanduser().resolve()
     manifest, settings = _load_manifest(manifest_path)
@@ -701,6 +760,7 @@ def supervise_public_service(manifest_path: Path) -> int:
     server_root = Path(str(settings["server_root"])).resolve()
     redis_config = server_root.parent / "redis" / "redis.conf"
     pause_path = runtime / "state" / "honcho" / "INGESTION_PAUSED.json"
+    uv_binary = _supervisor_uv_binary()
     stopping = False
 
     def stop_signal(_signum: int, _frame: Any) -> None:
@@ -746,7 +806,7 @@ def supervise_public_service(manifest_path: Path) -> int:
         while not stopping:
             api = subprocess.Popen(
                 [
-                    "uv",
+                    uv_binary,
                     "run",
                     "--frozen",
                     "fastapi",
@@ -760,7 +820,7 @@ def supervise_public_service(manifest_path: Path) -> int:
                 cwd=server_root,
             )
             deriver = subprocess.Popen(
-                ["uv", "run", "--frozen", "python", "-m", "src.deriver"],
+                [uv_binary, "run", "--frozen", "python", "-m", "src.deriver"],
                 cwd=server_root,
             )
             service_children = [api, deriver]

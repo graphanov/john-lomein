@@ -309,7 +309,10 @@ class HonchoBrokerTest(unittest.TestCase):
             os.chmod(path, 0o600)
 
             binding = load_binding(
-                {"BOT_HERMES_HOME": str(runtime)},
+                {
+                    "JOHN_LOMEIN_INSTANCE_HERMES_HOME": str(runtime),
+                    "HERMES_HOME": str(profile),
+                },
                 "john-lomein-guide",
             )
             self.assertEqual(

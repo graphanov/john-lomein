@@ -19,6 +19,7 @@ There is deliberately no "best effort" execution path when the manifest says
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import platform
 import re
@@ -59,6 +60,16 @@ PROVIDER_SESSION_RE = re.compile(r"^[0-9a-f]{24}$")
 PROFILE_ROLE_BY_NAME = {
     profile: role for role, profile in CANONICAL_ROLE_PROFILES.items()
 }
+HERMES_RUNTIME_CODE_ROOTS = (
+    ".git", "acp_adapter", "agent", "batch_runner", "cli", "cron", "gateway",
+    "hermes_bootstrap", "hermes_cli", "hermes_constants", "hermes_logging",
+    "hermes_state", "hermes_state_common", "hermes_state_portability",
+    "hermes_state_schema", "hermes_state_search", "hermes_time",
+    "mcp_serve", "model_tools", "plugins", "providers",
+    "registration_lifecycle", "run_agent", "tools",
+    "toolset_distributions", "toolsets", "trajectory_compressor",
+    "tui_gateway", "utils",
+)
 # Hermes keeps gateway/session databases and atomic JSON siblings directly in a
 # selected profile root.  When that exact root is made writable, these product
 # and credential surfaces must remain immutable inside the model namespace.
@@ -773,6 +784,88 @@ def _validate_no_private_aliases(roots: Sequence[Path], private: Path) -> None:
                     )
 
 
+def _hermes_runtime_read_roots(
+    command: Sequence[str],
+    env: Mapping[str, str],
+) -> list[Path]:
+    if not command or not Path(str(command[0])).name.startswith("python"):
+        return []
+    real_raw = str(env.get("HERMES_REAL_HOME") or "").strip()
+    if not real_raw:
+        raise IsolationError("model_isolation_real_home_invalid")
+    real_home = Path(real_raw).expanduser().resolve(strict=True)
+    interpreter = Path(os.path.abspath(str(command[0])))
+    venv_root = interpreter.parent.parent
+    if not _is_within(venv_root.resolve(strict=True), real_home):
+        return []
+    engine_root = venv_root.parent
+    if venv_root.name != "venv" or engine_root.name != "hermes-agent":
+        raise IsolationError("model_isolation_hermes_venv_unsafe")
+
+    def checked(path: Path, label: str) -> Path:
+        raw_path = Path(os.path.abspath(path.expanduser()))
+        info = raw_path.stat()
+        if raw_path.is_symlink() or info.st_uid not in {0, os.geteuid()} or info.st_mode & 0o022:
+            raise IsolationError(f"{label}_unsafe")
+        if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+            raise IsolationError(f"{label}_invalid")
+        return raw_path
+
+    allowed = [checked(venv_root, "model_isolation_hermes_venv")]
+    target_root = interpreter.resolve(strict=True).parent.parent
+    if _is_within(target_root, real_home):
+        runtime_base = engine_root / ".hermes-runtime" / "python"
+        checked_runtime = checked(runtime_base, "model_isolation_python_runtime")
+        if not _is_within(target_root, checked_runtime.resolve(strict=True)):
+            raise IsolationError("model_isolation_python_runtime_outside_engine")
+        allowed.append(checked_runtime)
+    for name in HERMES_RUNTIME_CODE_ROOTS:
+        candidate = engine_root / name
+        if not candidate.exists():
+            candidate = candidate.with_suffix(".py")
+        if candidate.exists():
+            allowed.append(checked(candidate, f"model_isolation_hermes_code_{name}"))
+    return list(dict.fromkeys(allowed))
+
+
+def _guide_gateway_network_allowed(
+    active_profile: Path | None,
+    profile: str | None,
+    command: Sequence[str],
+) -> bool:
+    if (
+        profile != CANONICAL_ROLE_PROFILES["guide"]
+        or active_profile is None
+        or not any(
+            command[index : index + 2] == ["gateway", "run"]
+            for index in range(len(command) - 1)
+        )
+    ):
+        return False
+    config_path = active_profile / "config.yaml"
+    try:
+        info = config_path.lstat()
+    except OSError:
+        raise IsolationError("model_isolation_guide_config_missing") from None
+    if (
+        config_path.is_symlink()
+        or not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or info.st_mode & 0o022
+    ):
+        raise IsolationError("model_isolation_guide_config_unsafe")
+    try:
+        import yaml
+        from john_lomein_memory_contract import agent_memory_boundary_errors
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        errors = agent_memory_boundary_errors(config, "guide")
+    except Exception:
+        raise IsolationError("model_isolation_guide_tool_contract_invalid") from None
+    if errors:
+        raise IsolationError("model_isolation_guide_tool_contract_invalid")
+    return True
+
+
 def darwin_policy(
     env: Mapping[str, str],
     *,
@@ -780,6 +873,8 @@ def darwin_policy(
     profile: str | None = None,
     provider_socket: Path | None = None,
     honcho_socket: Path | None = None,
+    runtime_read_roots: Sequence[Path] = (),
+    allow_gateway_network: bool = False,
 ) -> str:
     """Build a Seatbelt policy with private reads and policy writes denied."""
 
@@ -791,6 +886,8 @@ def darwin_policy(
         env,
         active_profile=active_profile,
     )
+    if allow_gateway_network:
+        writable = [home, *writable]
     lines = [
         "(version 1)",
         "(allow default)",
@@ -811,9 +908,11 @@ def darwin_policy(
         "(allow file-write*",
         '  (literal "/dev/null")',
         '  (literal "/dev/tty")',
+        '  (literal "/dev/dtracehelper")',
         *(
-            f"  (subpath {_scheme_string(_policy_path(path))})"
+            f"  ({matcher} {_scheme_string(_policy_path(path))})"
             for path in writable
+            for matcher in ("literal", "subpath")
         ),
         ")",
         (
@@ -835,6 +934,9 @@ def darwin_policy(
             f"(subpath {_scheme_string(_policy_path(projection))}))"
         ),
     ]
+    if allow_gateway_network:
+        lines.append("(allow network-outbound)")
+        lines.append("(allow network-bind)")
     if provider_socket is not None:
         socket_path = _validate_provider_socket_path(provider_socket)
         lines.append(
@@ -863,13 +965,35 @@ def darwin_policy(
     real_home = Path(real_home_raw).expanduser().resolve()
     for spelling in _policy_spellings(real_home):
         lines.append(f"(deny file-read* (subpath {_scheme_string(spelling)}))")
-    readable_roots = [home]
+        lines.append(
+            f"(allow file-read-metadata (literal {_scheme_string(spelling)}))"
+        )
+    readable_roots = list(dict.fromkeys([home, *runtime_read_roots, *writable]))
     local = str(env.get("BOT_LOCAL") or "").strip()
     if local:
         readable_roots.append(Path(local).expanduser().resolve())
+    metadata_ancestors: list[Path] = []
+    for root in [*writable, *readable_roots]:
+        canonical = root.resolve(strict=False)
+        if not _is_within(canonical, real_home) or canonical == real_home:
+            continue
+        metadata_ancestors.append(canonical)
+        parent = canonical.parent
+        while parent != real_home and parent.parent != parent:
+            metadata_ancestors.append(parent)
+            parent = parent.parent
+    for parent in dict.fromkeys(metadata_ancestors):
+        for spelling in _policy_spellings(parent):
+            lines.append(
+                f"(allow file-read-metadata (literal {_scheme_string(spelling)}))"
+            )
     for root in readable_roots:
+        matchers = ("literal", "subpath") if root.is_dir() else ("literal",)
         for spelling in _policy_spellings(root):
-            lines.append(f"(allow file-read* (subpath {_scheme_string(spelling)}))")
+            for matcher in matchers:
+                lines.append(
+                    f"(allow file-read* ({matcher} {_scheme_string(spelling)}))"
+                )
     lines.append(f"(deny file-read* file-write* (subpath {_scheme_string(_policy_path(protected))}))")
     for root in _controller_readable_roots(env):
         lines.append(f"(allow file-read* (subpath {_scheme_string(_policy_path(root))}))")
@@ -930,6 +1054,20 @@ def _real_directory(path: Path, *, label: str) -> Path:
     return checked
 
 
+def _model_tmp_root(env: Mapping[str, str]) -> Path:
+    temporary = Path("/tmp").resolve(strict=True)
+    info = temporary.stat()
+    if info.st_uid != 0 or not stat.S_ISDIR(info.st_mode) or not stat.S_IMODE(info.st_mode) & stat.S_ISVTX:
+        raise IsolationError("model_isolation_tmp_unsafe")
+    tag = hashlib.sha256(str(_runtime_home(env)).encode()).hexdigest()[:10]
+    root = temporary / f"jl-mt-{os.geteuid()}-{tag}"
+    root.mkdir(mode=0o700, exist_ok=True)
+    root_info = root.lstat()
+    if root.is_symlink() or root_info.st_uid != os.geteuid() or stat.S_IMODE(root_info.st_mode) != 0o700:
+        raise IsolationError("model_isolation_tmp_root_unsafe")
+    return root
+
+
 def _model_writable_roots(
     env: Mapping[str, str],
     *,
@@ -940,6 +1078,7 @@ def _model_writable_roots(
         home / "state",
         home / "logs",
         home / "work",
+        _model_tmp_root(env),
     ]
     checkout = str(env.get("BOT_LOCAL") or "").strip()
     if checkout:
@@ -962,6 +1101,16 @@ def _model_writable_roots(
             roots.append(root)
             seen.add(root)
     return roots
+
+
+def _model_working_directory(env: Mapping[str, str]) -> Path:
+    configured = str(env.get("BOT_LOCAL") or "").strip()
+    candidate = Path(configured).expanduser() if configured else _runtime_home(env) / "work"
+    root = _real_directory(candidate, label="model_isolation_working_directory")
+    info = root.stat()
+    if info.st_uid != os.geteuid() or info.st_mode & 0o022:
+        raise IsolationError("model_isolation_working_directory_unsafe")
+    return root
 
 
 def _resolve_command(command: Sequence[str], env: Mapping[str, str]) -> list[str]:
@@ -1104,6 +1253,7 @@ def _provider_bootstrap_command(
             "-I",
             str(bootstrap),
             command[2],
+            "--",
             *command[3:],
         ]
     for index in range(1, len(command) - 1):
@@ -1117,6 +1267,7 @@ def _provider_bootstrap_command(
                 str(bootstrap),
                 "--module",
                 "hermes_cli.main",
+                "--",
                 *command[index + 2 :],
             ]
     raise IsolationError("model_isolation_provider_bootstrap_not_hermes")
@@ -1181,10 +1332,18 @@ def isolated_command(
             honcho_socket = honcho_broker_socket_path(provider_socket)
         else:
             _validate_honcho_socket_path(honcho_socket, provider_socket)
+    runtime_read_roots = _hermes_runtime_read_roots(resolved, env)
+    allow_gateway_network = _guide_gateway_network_allowed(
+        active_profile,
+        profile,
+        resolved,
+    )
     protected = private_root(env)
     _validate_private_tree(protected)
     _validate_protected_deployment(home)
     current = system or platform.system()
+    if allow_gateway_network and current != "Darwin":
+        raise IsolationError("model_isolation_guide_gateway_network_unsupported")
     if current == "Darwin":
         # Seatbelt is path based, so reject aliases from every tree the model
         # can write before entering the policy. Bubblewrap masks the protected
@@ -1210,6 +1369,8 @@ def isolated_command(
                 profile=profile,
                 provider_socket=provider_socket,
                 honcho_socket=honcho_socket,
+                runtime_read_roots=runtime_read_roots,
+                allow_gateway_network=allow_gateway_network,
             ),
             *resolved,
         ]
@@ -1261,6 +1422,8 @@ def isolated_command(
         raise IsolationError("model_isolation_real_home_invalid")
     real_home = Path(real_home_raw).expanduser().resolve()
     args.extend(("--tmpfs", str(real_home), "--ro-bind", str(home), str(home)))
+    for root in runtime_read_roots:
+        args.extend(("--ro-bind", str(root), str(root)))
     local = str(env.get("BOT_LOCAL") or "").strip()
     if local:
         local_path = Path(local).expanduser().resolve()
@@ -1363,6 +1526,7 @@ def isolated_environment(
     out.pop("BOT_STEWARD_PRIVATE_ROOT", None)
     out.pop("BOT_STEWARD_PROJECTION_ROOT", None)
     out["JOHN_LOMEIN_MODEL_ISOLATED"] = "1"
+    out["PYTHONDONTWRITEBYTECODE"] = "1"
     active_profile = _active_profile_root(env, profile)
     if active_profile is not None:
         # Hermes freezes several home-derived paths at import time. Pin the
@@ -1371,19 +1535,7 @@ def isolated_environment(
         out["HERMES_HOME"] = str(active_profile)
         out["HERMES_HONCHO_HOST"] = "hermes"
     if _mode(env) == MODE_REQUIRED:
-        home = _runtime_home(env)
-        model_tmp = home / "work" / "model-tmp"
-        if model_tmp.is_symlink():
-            raise IsolationError("model_isolation_tmp_symlink")
-        model_tmp.mkdir(parents=True, exist_ok=True, mode=0o700)
-        info = model_tmp.lstat()
-        if (
-            not stat.S_ISDIR(info.st_mode)
-            or info.st_uid != os.geteuid()
-            or info.st_mode & 0o077
-        ):
-            raise IsolationError("model_isolation_tmp_unsafe")
-        out["TMPDIR"] = str(model_tmp)
+        out["TMPDIR"] = str(_model_tmp_root(env))
     return out
 
 
@@ -1462,6 +1614,7 @@ def _run_isolation_canary(
             capture_output=True,
             text=True,
             timeout=20,
+            cwd=str(_model_working_directory(env)),
         )
     except Exception as exc:
         return False, f"model_isolation_canary_error:{type(exc).__name__}:{exc}"
@@ -1538,6 +1691,8 @@ def main(argv: list[str] | None = None) -> int:
             profile=args.profile,
         )
         child_env = isolated_environment(env, profile=args.profile)
+        working_directory = _model_working_directory(env)
+        os.chdir(working_directory)
     except Exception as exc:
         print(f"john-lomein model isolation refused execution: {exc}", file=sys.stderr)
         return 78
