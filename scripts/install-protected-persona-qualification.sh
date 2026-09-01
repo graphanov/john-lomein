@@ -39,7 +39,7 @@ is not connected to runtime orchestration. This installer never bootstraps or
 enables that job and never emits an activation receipt.
 
 The installer, product source, Python runtime, config, and keys must be staged
-under root-controlled, non-symlinked ancestor chains. cryptography 49.0.0 and
+under root-controlled, non-symlinked ancestor chains. cryptography 50.0.1 and
 PyYAML >=6.0.2,<7 must be importable by the supplied Python for installation
 preflight. Their successful import is not a native-closure qualification.
 EOF
@@ -722,8 +722,8 @@ try:
 except CaptureSelectionError as exc:
     raise SystemExit(f"capture selection rejected: {exc.code}") from exc
 
-if cryptography.__version__ != "49.0.0":
-    raise SystemExit("cryptography 49.0.0 is required for key preflight")
+if cryptography.__version__ != "50.0.1":
+    raise SystemExit("cryptography 50.0.1 is required for key preflight")
 yaml_version = tuple(int(item) for item in yaml.__version__.split(".")[:3])
 if not ((6, 0, 2) <= yaml_version < (7, 0, 0)):
     raise SystemExit("PyYAML >=6.0.2,<7 is required")

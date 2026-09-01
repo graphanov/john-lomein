@@ -30,7 +30,7 @@ usage:
     --submit-group EXISTING_GROUP
 
 The installer, source snapshot, supplied Python runtime, configs, keys, and
-token must be root controlled. cryptography 49.0.0 must already be installed
+token must be root controlled. cryptography 50.0.1 must already be installed
 in the isolated Python runtime. The signer and requester must be separate OS
 identities. The signer primary group is private; a separate submit group is
 the only shared filesystem relationship.
@@ -571,9 +571,9 @@ from cryptography.hazmat.bindings import _rust
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
-if cryptography.__version__ != "49.0.0":
+if cryptography.__version__ != "50.0.1":
     raise SystemExit(
-        "the release owner gateway requires locked cryptography 49.0.0"
+        "the release owner gateway requires locked cryptography 50.0.1"
     )
 native = getattr(_rust, "__file__", "")
 if not native or not pathlib.Path(native).is_file():

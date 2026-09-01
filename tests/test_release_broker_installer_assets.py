@@ -143,7 +143,7 @@ class ProtectedReleaseBrokerInstallerAssetTests(unittest.TestCase):
             "sys.exec_prefix",
             "sysconfig.get_paths()",
             "validate_runtime_path",
-            'cryptography.__version__ != "49.0.0"',
+            'cryptography.__version__ != "50.0.1"',
             "cryptography_package",
             "cryptography_native_binding",
             "cryptography_distribution",

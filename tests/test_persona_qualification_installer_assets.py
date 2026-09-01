@@ -164,7 +164,7 @@ class PersonaQualificationInstallerAssetTests(unittest.TestCase):
             value
             for value in self.blocks
             if "CONFIG_FIELDS =" in value
-            and "cryptography 49.0.0" in value
+            and "cryptography 50.0.1" in value
         )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

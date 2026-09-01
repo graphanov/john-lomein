@@ -44,7 +44,7 @@ Normal `setup.sh` never installs this service. Provision the dedicated broker us
 
 Do not run the installer with `sudo` from the model/requester-writable product checkout. First verify the intended source revision and stage the complete product snapshot into a root-owned, non-symlinked directory that is not group/other writable. The installer refuses any weaker source chain; otherwise the requester could race privileged code while root copies it.
 
-The supplied Python must be 3.11 or newer and live under a root-owned, non-writable, non-symlinked trust chain. Under isolated mode it must import the locked `cryptography` 49.0.0 dependency from equally trusted paths. A requester-owned Homebrew Python is intentionally rejected even if its absolute path looks plausible.
+The supplied Python must be 3.11 or newer and live under a root-owned, non-writable, non-symlinked trust chain. Under isolated mode it must import the locked `cryptography` 50.0.1 dependency from equally trusted paths. A requester-owned Homebrew Python is intentionally rejected even if its absolute path looks plausible.
 
 Install as root:
 

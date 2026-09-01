@@ -27,7 +27,7 @@ usage:
     --submit-group EXISTING_GROUP
 
 The installer, broker source, supplied Python runtime, and their ancestor
-chains must be root controlled. cryptography 49.0.0 must already be installed
+chains must be root controlled. cryptography 50.0.1 must already be installed
 in the supplied isolated Python runtime.
 
 The installed code root is shared by all protected-broker instances. This
@@ -614,9 +614,9 @@ from cryptography.hazmat.bindings import _rust
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, padding, rsa
 
-if cryptography.__version__ != "49.0.0":
+if cryptography.__version__ != "50.0.1":
     raise SystemExit(
-        "the protected broker requires locked cryptography 49.0.0"
+        "the protected broker requires locked cryptography 50.0.1"
     )
 native = getattr(_rust, "__file__", "")
 if not native or not pathlib.Path(native).is_file():
