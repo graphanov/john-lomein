@@ -72,7 +72,7 @@ First public alpha of the macOS-first John Lomein appliance.
 
 ### Known limitations
 
-- Participant-deletion and retention application remain disabled pending crash-safe startup/replay qualification; planning and verification remain available.
+- Participant deletion and retention application are available only through the dedicated public Honcho service with exact-ID plans, verified public-only backups, tombstone/replay gates, and bounded backup quotas; shared or personal Honcho services remain ineligible.
 - Protected release automation requires separately installed root-owned broker and owner-gateway credentials.
 - The npm onboarding package is designed but not implemented or published in this release.
 - Hermes Peer/Bot Chat collaboration remains advisory and disabled until a least-privilege product broker is available.
