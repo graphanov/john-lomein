@@ -14,14 +14,11 @@ for command in git make uv python3; do
 done
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
-  SAFE_TMPDIR="$(cd "$HOME" && pwd -P)"
-else
-  SAFE_TMPDIR="${TMPDIR:-$(getconf DARWIN_USER_TEMP_DIR)}"
-  SAFE_TMPDIR="$(cd "$SAFE_TMPDIR" && pwd -P)"
-fi
+SAFE_TMPDIR="${TMPDIR:-$(getconf DARWIN_USER_TEMP_DIR)}"
+SAFE_TMPDIR="$(cd "$SAFE_TMPDIR" && pwd -P)"
 TEMP_ROOT="$(mktemp -d "$SAFE_TMPDIR/jlcm.XXXXXX")"
 chgrp "$(id -g)" "$TEMP_ROOT"
+/bin/chmod -N "$TEMP_ROOT"
 chmod 700 "$TEMP_ROOT"
 cleanup() {
   rm -rf "$TEMP_ROOT"

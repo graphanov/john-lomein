@@ -1349,7 +1349,12 @@ def verify_command_artifacts(descriptor: dict[str, Any]) -> None:
         raise QualificationError(f"{descriptor['kind']}-command-artifact-drift")
 
 
-def load_command_descriptor(path: Path, *, kind: str) -> dict[str, Any]:
+def load_command_descriptor(
+    path: Path,
+    *,
+    kind: str,
+    forbidden_roots: list[Path] | None = None,
+) -> dict[str, Any]:
     descriptor_path = path.expanduser().absolute()
     _reject_symlink_chain(descriptor_path.parent, code=f"{kind}-descriptor-parent")
     _validate_trusted_directory_chain(descriptor_path.parent, code=f"{kind}-descriptor-parent")
@@ -1359,13 +1364,22 @@ def load_command_descriptor(path: Path, *, kind: str) -> dict[str, Any]:
     strict_keys(data, allowed=allowed, code=f"{kind}-descriptor")
     if data.get("schema_version") != COMMAND_SCHEMA or data.get("kind") != kind:
         raise QualificationError(f"{kind}-descriptor-contract")
+    argv = _fixed_argv(data.get("argv"), code=f"{kind}-descriptor-argv")
+    for argument in argv:
+        artifact = Path(argument).expanduser()
+        if (
+            artifact.is_absolute()
+            and forbidden_roots
+            and any(_path_contains(root, artifact) for root in forbidden_roots)
+        ):
+            raise QualificationError("command-artifact-inside-runtime-or-repository")
     result = {
         "path": descriptor_path.resolve(),
         "sha256": sha256_json(data),
         "kind": kind,
         "id": token(data.get("id"), code=f"{kind}-descriptor-id"),
         "route_id": token(data.get("route_id"), code=f"{kind}-descriptor-route"),
-        "argv": _fixed_argv(data.get("argv"), code=f"{kind}-descriptor-argv"),
+        "argv": argv,
         "credential_env": _credential_names(data.get("credential_env"), code=f"{kind}-credential-env"),
     }
     result["artifacts"] = command_artifacts(result["argv"], code=f"{kind}-command")
@@ -2073,13 +2087,22 @@ def run_qualification(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         rubric_path=args.rubric,
         require_deployed_current=True,
     )
-    candidate_descriptor = load_command_descriptor(args.candidate_command, kind="candidate")
-    judge_descriptor = load_command_descriptor(args.judge_command, kind="judge")
+    forbidden_roots = [instance["hermes_home"], instance["checkout"], ROOT]
+    candidate_descriptor = load_command_descriptor(
+        args.candidate_command,
+        kind="candidate",
+        forbidden_roots=forbidden_roots,
+    )
+    judge_descriptor = load_command_descriptor(
+        args.judge_command,
+        kind="judge",
+        forbidden_roots=forbidden_roots,
+    )
     validate_descriptors(
         candidate_descriptor,
         judge_descriptor,
         candidates,
-        forbidden_roots=[instance["hermes_home"], instance["checkout"], ROOT],
+        forbidden_roots=forbidden_roots,
     )
     run_id = args.run_id or time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + uuid.uuid4().hex[:12]
     if not RUN_ID_RE.fullmatch(run_id):
