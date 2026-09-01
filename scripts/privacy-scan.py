@@ -14,7 +14,7 @@ patterns=[
     ('discord_id', re.compile(r'\b\d{17,20}\b')),
     ('token_like', re.compile(r'\b(?:ghp_|github_pat_|sk-|xox[baprs]-|AIza)[A-Za-z0-9_\-]{12,}')),
 ]
-name_pat=re.compile(r'\b('+'|'.join(re.escape(x) for x in concrete_terms)+r')\b')
+name_pat=re.compile(r'\b('+'|'.join(re.escape(x) for x in concrete_terms)+r')\b', re.I)
 fail=[]
 for p in ROOT.rglob('*'):
     if any(part in skip for part in p.parts) or not p.is_file():

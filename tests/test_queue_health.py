@@ -236,12 +236,12 @@ class QueueHealthCoverageTest(unittest.TestCase):
 
     def test_ready_issue_is_covered_by_open_pr_branch_or_body(self):
         queue = load_queue_health()
-        issue = {"number": 35, "title": "lazyglm uninstall leaves AGENTS.md"}
+        issue = {"number": 35, "title": "sample runtime uninstall leaves AGENTS.md"}
         prs = [
             {
                 "number": 36,
                 "title": "fix(uninstall): clean up artifacts",
-                "headRefName": "forge/issue-35-lazyglm-uninstall-leaves-agents-stale-gitignore-entry",
+                "headRefName": "forge/issue-35-sample-runtime-uninstall-leaves-agents-stale-gitignore-entry",
                 "body": "Closes #35",
             }
         ]
@@ -249,7 +249,7 @@ class QueueHealthCoverageTest(unittest.TestCase):
 
     def test_unrelated_ready_issue_is_not_covered(self):
         queue = load_queue_health()
-        issue = {"number": 35, "title": "lazyglm uninstall leaves AGENTS.md"}
+        issue = {"number": 35, "title": "sample runtime uninstall leaves AGENTS.md"}
         prs = [
             {
                 "number": 36,
