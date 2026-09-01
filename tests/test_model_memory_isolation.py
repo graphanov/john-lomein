@@ -52,6 +52,8 @@ class ModelMemoryIsolationTest(unittest.TestCase):
             home / "private" / "owner-overrides",
             home / "private" / "owner-overrides" / "inbox",
             home / "private" / "review-receipts",
+            home / "private" / "honcho-deletion-tombstones",
+            home / "private" / "honcho-backups",
             home / "private" / "release-bundles",
             home / "private" / "learning-steward",
             home / "private" / "learning-steward" / "learning",
@@ -59,7 +61,10 @@ class ModelMemoryIsolationTest(unittest.TestCase):
             home / "private" / "learning-steward" / "mnemosyne" / "data",
             home / "state" / "learning",
             home / "state" / "continuity",
+            home / "state" / "honcho",
+            home / "services" / "public-honcho",
             home / "logs",
+            home / "logs" / "public-honcho",
             home / "work",
             home / "profiles" / "john-lomein-guide" / "home",
             home / "profiles" / "john-lomein-guide" / "home" / ".config" / "gh",
@@ -218,6 +223,18 @@ class ModelMemoryIsolationTest(unittest.TestCase):
                 f'(deny file-read* file-write* (subpath "{review_receipts}"))',
                 policy,
             )
+            hidden = (
+                home / "state" / "honcho",
+                home / "private" / "honcho-deletion-tombstones",
+                home / "private" / "honcho-backups",
+                home / "services" / "public-honcho",
+                home / "logs" / "public-honcho",
+            )
+            for root in hidden:
+                self.assertIn(
+                    f'(deny file-read* file-write* (subpath "{root.resolve()}"))',
+                    policy,
+                )
             self.assertIn(
                 f'(deny file-write* (subpath "{(home / "scripts").resolve()}"))',
                 policy,
@@ -441,6 +458,16 @@ class ModelMemoryIsolationTest(unittest.TestCase):
             review_receipts = str(Path(env["BOT_HERMES_HOME"]) / "private" / "review-receipts")
             review_index = command.index(review_receipts)
             self.assertEqual(command[review_index - 1], "--tmpfs")
+            home = Path(env["BOT_HERMES_HOME"])
+            for root in (
+                home / "state" / "honcho",
+                home / "private" / "honcho-deletion-tombstones",
+                home / "private" / "honcho-backups",
+                home / "services" / "public-honcho",
+                home / "logs" / "public-honcho",
+            ):
+                index = command.index(str(root))
+                self.assertEqual(command[index - 1], "--tmpfs")
             projection_index = command.index(projection)
             self.assertEqual(command[projection_index - 1], "--ro-bind")
             self.assertIn(env["BOT_LOCAL"], command)

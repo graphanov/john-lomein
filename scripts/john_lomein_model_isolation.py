@@ -400,13 +400,21 @@ def _hidden_credential_paths(
 def _hidden_control_roots(env: Mapping[str, str]) -> list[Path]:
     home = _runtime_home(env)
     roots: list[Path] = []
-    for name in ("owner-overrides", "review-receipts"):
-        root = home / "private" / name
+    candidates = (
+        (home / "private" / "owner-overrides", "owner-overrides"),
+        (home / "private" / "review-receipts", "review-receipts"),
+        (home / "private" / "honcho-deletion-tombstones", "honcho-deletion-tombstones"),
+        (home / "private" / "honcho-backups", "honcho-backups"),
+        (home / "state" / "honcho", "honcho-state"),
+        (home / "services" / "public-honcho", "public-honcho-service"),
+        (home / "logs" / "public-honcho", "public-honcho-logs"),
+    )
+    for root, label in candidates:
         if not root.exists() and not root.is_symlink():
             continue
-        checked = _absolute_no_symlink(root, label=f"{name}_control_root")
+        checked = _absolute_no_symlink(root, label=f"{label}_control_root")
         if not checked.is_dir():
-            raise IsolationError(f"{name}_control_root_not_directory")
+            raise IsolationError(f"{label}_control_root_not_directory")
         roots.append(checked)
     return roots
 
