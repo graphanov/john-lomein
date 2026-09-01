@@ -31,6 +31,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Install pinned uv and Python
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -41,7 +42,7 @@ jobs:
 
       - name: Run the repository verification contract on Ubuntu
         if: runner.os == 'Linux'
-        run: make verify
+        run: make clean-machine-ubuntu
 
       - name: Run the isolated clean-machine contract on macOS
         if: runner.os == 'macOS'

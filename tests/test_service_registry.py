@@ -56,7 +56,14 @@ class ServiceRegistryTest(unittest.TestCase):
         return manifest_a, manifest_b, runtime_a, runtime_b, launch_agents
 
     @staticmethod
-    def write_plist(path: Path, label: str, runtime_home: Path) -> None:
+    def write_plist(
+        path: Path,
+        label: str,
+        runtime_home: Path,
+        *,
+        isolated: bool = True,
+    ) -> None:
+        profile: str | None = None
         if label.startswith("ai.hermes.gateway-john-lomein-"):
             profile = "john-lomein-guide"
             arguments = [
@@ -92,6 +99,23 @@ class ServiceRegistryTest(unittest.TestCase):
                 )
             ]
             working_directory = runtime_home
+        if isolated and (
+            label.startswith("ai.hermes.gateway-john-lomein-")
+            or label.endswith("-scheduler")
+        ):
+            assert profile is not None
+            arguments = [
+                "/usr/bin/python3",
+                str(
+                    runtime_home
+                    / "scripts"
+                    / "john_lomein_model_isolation.py"
+                ),
+                "--profile",
+                profile,
+                "--",
+                *arguments,
+            ]
         with path.open("wb") as handle:
             plistlib.dump(
                 {
@@ -107,7 +131,12 @@ class ServiceRegistryTest(unittest.TestCase):
             )
 
     @staticmethod
-    def launchctl_output(label: str, runtime_home: Path) -> str:
+    def launchctl_output(
+        label: str,
+        runtime_home: Path,
+        *,
+        isolated: bool = True,
+    ) -> str:
         if label.startswith("ai.hermes.gateway-john-lomein-"):
             profile = "john-lomein-guide"
         else:
@@ -122,6 +151,19 @@ class ServiceRegistryTest(unittest.TestCase):
             "run",
             "--replace",
         ]
+        if isolated:
+            arguments = [
+                "/usr/bin/python3",
+                str(
+                    runtime_home
+                    / "scripts"
+                    / "john_lomein_model_isolation.py"
+                ),
+                "--profile",
+                profile,
+                "--",
+                *arguments,
+            ]
         lines = [
             "program = /usr/bin/python3",
             "arguments = {",
@@ -563,6 +605,20 @@ class ServiceRegistryTest(unittest.TestCase):
         self.assertEqual(status["identity_mismatches"], [label])
         self.assertEqual(status["discovered"], [])
 
+    def test_unwrapped_scheduler_gateway_is_rejected(self):
+        manifest, _, runtime, _, launch_agents = self.fixture()
+        label = "ai.hermes.john-lomein-alpha-scheduler"
+        plist = launch_agents / f"{label}.plist"
+        self.write_plist(plist, label, runtime, isolated=False)
+
+        self.assertNotEqual(registry._plist_identity(plist)[2], "")
+        with self.assertRaises(registry.ServiceRegistryError):
+            registry.record_services(
+                manifest,
+                runtime,
+                {"scheduler": label},
+            )
+
     def test_plist_command_contract_is_bound_to_registered_identity(self):
         manifest, _, runtime, _, launch_agents = self.fixture()
         label = "ai.hermes.john-lomein-alpha-scheduler"
@@ -949,7 +1005,11 @@ class ServiceRegistryTest(unittest.TestCase):
                 if label in loaded:
                     return SimpleNamespace(
                         returncode=0,
-                        stdout=self.launchctl_output(label, runtime),
+                        stdout=self.launchctl_output(
+                            label,
+                            runtime,
+                            isolated=False,
+                        ),
                         stderr="",
                     )
                 return SimpleNamespace(

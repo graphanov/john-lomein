@@ -56,6 +56,23 @@ class CaptureNativeBundleBuilderTests(unittest.TestCase):
             callback(*args, **kwargs)
         self.assertEqual(caught.exception.code, code)
 
+    def test_framework_runtime_maps_python_binary_to_bundle_libpython(self) -> None:
+        runtime_root = Path(
+            "/Library/Frameworks/Python.framework/Versions/3.11"
+        )
+        source, bundle_name = builder._runtime_library_from_probe(
+            {
+                "ldlibrary": "Python",
+                "libdir": str(runtime_root / "lib"),
+                "pythonframework": "Python",
+            },
+            runtime_root=runtime_root,
+            major="3",
+            minor="11",
+        )
+        self.assertEqual(source, runtime_root / "Python")
+        self.assertEqual(bundle_name, "libpython3.11.dylib")
+
     def _source_stdlib(self, name: str = "stdlib") -> Path:
         source = self.root / name
         source.mkdir()

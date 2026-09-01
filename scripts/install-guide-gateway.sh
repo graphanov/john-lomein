@@ -28,6 +28,22 @@ else
   [ -x "$RUNTIME_PYTHON" ] || RUNTIME_PYTHON="$(command -v python3)"
   PRODUCT_PYTHON=("$RUNTIME_PYTHON")
 fi
+require_isolated_gateway_assets() {
+  local runtime_home="$1"
+  local name path
+  for name in \
+    john_lomein_model_isolation.py \
+    john_lomein_provider_bootstrap.py \
+    john_lomein_provider_broker.py \
+    john_lomein_honcho_broker.py
+  do
+    path="$runtime_home/scripts/$name"
+    if [ ! -f "$path" ] || [ -L "$path" ]; then
+      echo "required isolated gateway asset missing or unsafe: $path" >&2
+      return 78
+    fi
+  done
+}
 if [ -z "${JOHN_LOMEIN_SERVICE_LOCK_FD:-}" ]; then
   exec "${PRODUCT_PYTHON[@]}" "$SERVICE_REGISTRY" run-locked -- bash "$0" "$1"
 fi
@@ -69,13 +85,7 @@ rollback_gateway() {
 }
 trap rollback_gateway ERR INT TERM
 PAUSE_FILE="$BOT_HERMES_HOME/state/honcho/INGESTION_PAUSED.json"
-TOMBSTONE_DIR="$BOT_HERMES_HOME/private/honcho-deletion-tombstones"
-TOMBSTONES_PRESENT=0
-shopt -s nullglob dotglob
-for tombstone in "$TOMBSTONE_DIR"/*; do
-  if [ -e "$tombstone" ]; then TOMBSTONES_PRESENT=1; break; fi
-done
-if [ -e "$PAUSE_FILE" ] || [ "$TOMBSTONES_PRESENT" = "1" ] || \
+if [ -e "$PAUSE_FILE" ] || \
   [ "${BOT_MISSION_COMPLETE:-0}" != "1" ] || \
   [ "${BOT_DISCORD_ENABLED:-0}" != "1" ] || \
   [ "${BOT_GUIDE_GATEWAY_ENABLED:-0}" != "1" ]
@@ -120,6 +130,7 @@ if [ -z "${BOT_ALLOWED_CHANNELS:-}" ]; then
   echo "missing allowed Discord channels; refusing to start public guide gateway" >&2
   exit 2
 fi
+require_isolated_gateway_assets "$BOT_HERMES_HOME"
 export HERMES_HOME="$BOT_HERMES_HOME"
 export JOHN_LOMEIN_INSTANCE_HERMES_HOME="$BOT_HERMES_HOME"
 export JOHN_LOMEIN_HERMES_HOME="$BOT_HERMES_HOME"
@@ -127,6 +138,18 @@ export HERMES_MANAGED_DIR="$BOT_HERMES_MANAGED_ROOT/$BOT_GUIDE_PROFILE"
 "${PRODUCT_PYTHON[@]}" \
   "$BOT_HERMES_HOME/scripts/apply-guide-discord-config.py" \
   "$JL_INSTANCE_DIR" >/dev/null
+"${PRODUCT_PYTHON[@]}" \
+  "$BOT_HERMES_HOME/scripts/john_lomein_honcho_pilot.py" startup-gate \
+  --database "$BOT_HONCHO_DATABASE" \
+  --manifest "$JL_INSTANCE_MANIFEST" \
+  --service guide >/dev/null
+"${PRODUCT_PYTHON[@]}" \
+  "$BOT_HERMES_HOME/scripts/john_lomein_guide_runtime_preflight.py" \
+  --runtime-home "$BOT_HERMES_HOME" \
+  --manifest "$JL_INSTANCE_MANIFEST" \
+  --guide-profile "$BOT_GUIDE_PROFILE" \
+  --expected-workspace "$BOT_HONCHO_WORKSPACE" \
+  --hermes "$(command -v hermes)" >/dev/null
 "${PRODUCT_PYTHON[@]}" "$BOT_HERMES_HOME/scripts/john-lomein-trust-assertion.py" init-verifier >/dev/null
 HERMES_BIN="$(command -v hermes || true)"
 HERMES_PYTHON=""
@@ -154,9 +177,8 @@ PY
 export HERMES_GATEWAY_LOCK_DIR HERMES_REAL_HOME="$REAL_USER_HOME"
 export JOHN_LOMEIN_AUTH_AUTHORITY_HOME="$AUTH_AUTHORITY_HOME"
 if [ "${BOT_MODEL_PROVIDER:-}" = "openai-codex" ] || [ "${BOT_FALLBACK_PROVIDER:-}" = "openai-codex" ]; then
-  "$HERMES_PYTHON" "$BOT_HERMES_HOME/scripts/john_lomein_auth_projection.py" sync \
+  "$HERMES_PYTHON" "$BOT_HERMES_HOME/scripts/john_lomein_auth_projection.py" scrub \
     --runtime-home "$BOT_HERMES_HOME" \
-    --authority-home "$AUTH_AUTHORITY_HOME" \
     --provider openai-codex \
     --profile "$BOT_HERMES_HOME/profiles/$BOT_MAINTAINER_PROFILE" \
     --profile "$BOT_HERMES_HOME/profiles/$BOT_FORGE_PROFILE" \

@@ -358,8 +358,19 @@ class GhGuardCodexStateTest(unittest.TestCase):
     def test_fake_gh_passes_first_codex_review_request_through(self):
         with tempfile.TemporaryDirectory() as tmp:
             fake, log = self.make_fake_gh(tmp)
+            runtime, _policy, run = self.make_autonomy_runtime(tmp, lane="maintainer")
             env = dict(os.environ)
-            env.update({"JOHN_LOMEIN_REAL_GH": str(fake), "GH_CALL_LOG": str(log), "FAKE_GH_MODE": "empty"})
+            env.update(
+                {
+                    "JOHN_LOMEIN_REAL_GH": str(fake),
+                    "GH_CALL_LOG": str(log),
+                    "FAKE_GH_MODE": "empty",
+                    "BOT_HERMES_HOME": str(runtime),
+                    "HERMES_HOME": str(runtime),
+                    "JOHN_LOMEIN_AUTONOMY_LANE": "maintainer",
+                    "JOHN_LOMEIN_AUTONOMY_RUN_ID": run["run_id"],
+                }
+            )
             proc = subprocess.run(
                 [sys.executable, str(GUARD_PATH), "pr", "comment", "37", "--repo", "owner/repo", "--body", "@codex review"],
                 capture_output=True,

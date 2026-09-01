@@ -87,8 +87,8 @@ def _load_queue_health() -> ModuleType:
 
 def _trusted_git() -> Path:
     candidates = (
-        Path("/Applications/Xcode.app/Contents/Developer/usr/bin/git"),
         Path("/Library/Developer/CommandLineTools/usr/bin/git"),
+        Path("/Applications/Xcode.app/Contents/Developer/usr/bin/git"),
         Path("/usr/bin/git"),
     )
     git = next((candidate for candidate in candidates if candidate.is_file()), None)

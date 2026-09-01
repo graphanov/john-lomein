@@ -31,3 +31,12 @@ macOS is the primary supported platform. Ubuntu CI protects portable product log
 ## npm
 
 The planned npm package is a thin onboarding front door around the Python/Hermes product. It is not a Node rewrite. No npm publication occurs until the intended publisher identity is verified and the owner approves the exact package contents and version.
+
+## Python packaging
+
+The 0.1.x repository uses `pyproject.toml` as a locked `uv` environment and
+version-identity file, with `[tool.uv] package = false`. It is not a wheel or
+sdist project, declares no build backend, and must not be presented or
+published as a Python package. A future Python artifact requires an explicit
+package layout, complete artifact inventory, install test, and owner-approved
+release-policy change.

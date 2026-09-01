@@ -231,13 +231,17 @@ collaboration:
 memory:
   provider: honcho
   honcho:
-    base_url: http://127.0.0.1:8000
-    redis_url: redis://127.0.0.1:6379/0
+    # Dedicated values are deterministically derived from instance.slug unless
+    # explicitly set. Shared personal defaults (API 8000, Redis 6379/0, and
+    # database honcho_local) are rejected.
+    service_mode: dedicated_public
     owner_peer: owner
     guide_save_messages: true
-    database: honcho_local
+    checkout_url: https://github.com/plastic-labs/honcho.git
+    checkout_commit: 9379c634ed240d0225b63443606e5304a4e261c5
+    retention_interval_seconds: 300
+    backup_max_age_days: 30
     expected_memory_model: ""
-    server_root: ""
     # Must be true before Guide gateway activation; remains inactive by default.
     watchdog_enabled: false
     timeout: 120

@@ -19,7 +19,9 @@ def load_watchdog() -> Any:
     return module
 
 
-def test_unhealthy_watchdog_disables_writes_stops_guide_and_never_auto_clears(tmp_path):
+def test_unhealthy_watchdog_pauses_public_children_stops_guide_and_keeps_supervisor(
+    tmp_path,
+):
     watchdog = load_watchdog()
     home = tmp_path / "runtime"
     config = home / "profiles" / "john-lomein-guide" / "honcho.json"
@@ -29,7 +31,9 @@ def test_unhealthy_watchdog_disables_writes_stops_guide_and_never_auto_clears(tm
     manifest = tmp_path / "instance.yaml"
     manifest.write_text("instance: {slug: test}\n", encoding="utf-8")
     stops = []
+    supervisor_stops = []
     watchdog.stop_guide_service = lambda **kwargs: stops.append(kwargs)
+    watchdog.stop_public_honcho_supervisor = lambda **kwargs: supervisor_stops.append(kwargs)
     snapshot = home / "state" / "honcho" / "snapshot.json"
     result = watchdog.apply_watchdog(
         health={"healthy": False, "reasons": ["queue_oldest_seconds_exceeded"]},
@@ -37,22 +41,29 @@ def test_unhealthy_watchdog_disables_writes_stops_guide_and_never_auto_clears(tm
         manifest=manifest,
         guide_profile="john-lomein-guide",
         guide_label="ai.hermes.gateway-test-guide",
+        supervisor_label="ai.john-lomein.test.public-honcho",
         snapshot_path=snapshot,
     )
     assert result["decision"] == "pause"
     assert all(host["saveMessages"] is False for host in json.loads(config.read_text())["hosts"].values())
     assert len(stops) == 1
+    assert supervisor_stops == []
+    assert result["supervisor_resident"] is True
     assert (home / "state" / "honcho" / "INGESTION_PAUSED.json").is_file()
     stops.clear()
+    supervisor_stops.clear()
     again = watchdog.apply_watchdog(
         health={"healthy": True, "reasons": []},
         runtime_home=home,
         manifest=manifest,
         guide_profile="john-lomein-guide",
         guide_label="ai.hermes.gateway-test-guide",
+        supervisor_label="ai.john-lomein.test.public-honcho",
         snapshot_path=snapshot,
     )
     assert again["decision"] == "stay_paused"
     assert len(stops) == 1
+    assert supervisor_stops == []
+    assert again["supervisor_resident"] is True
     assert again["pause_reasserted"] is True
     assert all(host["saveMessages"] is False for host in json.loads(config.read_text())["hosts"].values())

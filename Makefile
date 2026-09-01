@@ -1,4 +1,4 @@
-.PHONY: test verify clean-machine-macos broker-test release-broker-test persona-eval persona-eval-verify persona-eval-fixtures persona-qualification-test persona-qualification-adapter-stage persona-qualify persona-qualification-status persona-qualification-verify persona-qualification-public-verify reputation-report reputation-verify continuity-import-status continuity-import-verify continuity-import-admit continuity-import-recover deploy doctor status smoke smoke-all gh-auth-repair privacy-scan tick-diagnostic tick-forge tick-overwatch tick-learning queue-health worker-status autonomy-status release-health release-dry-run release-broker-status release-prepare release-apply release-receipt-verify learning-smoke learning-backfill learning-review learning-digest learning-prepare-promotion learning-apply-promotion install-supervisor uninstall-supervisor install-guide-gateway install-protected-broker uninstall-protected-broker install-protected-release-broker uninstall-protected-release-broker install-protected-release-owner-gateway uninstall-protected-release-owner-gateway
+.PHONY: test verify check-clean clean-machine-ubuntu clean-machine-macos broker-test release-broker-test persona-eval persona-eval-verify persona-eval-fixtures persona-qualification-test persona-qualification-adapter-stage persona-qualify persona-qualification-status persona-qualification-verify persona-qualification-public-verify reputation-report reputation-verify continuity-import-status continuity-import-verify continuity-import-admit continuity-import-recover deploy doctor status smoke smoke-all gh-auth-repair privacy-scan tick-diagnostic tick-forge tick-overwatch tick-learning queue-health worker-status autonomy-status release-health release-dry-run release-broker-status release-prepare release-apply release-receipt-verify learning-smoke learning-backfill learning-review learning-digest learning-prepare-promotion learning-apply-promotion install-supervisor uninstall-supervisor install-guide-gateway install-protected-broker uninstall-protected-broker install-protected-release-broker uninstall-protected-release-broker install-protected-release-owner-gateway uninstall-protected-release-owner-gateway
 
 INSTANCE ?=
 PRODUCT_PYTHON ?= uv run --frozen python
@@ -65,24 +65,31 @@ RELEASE_PACKET ?=
 RELEASE_RECEIPT ?=
 
 test:
-	@PATH="$(TEST_PATH)" uv run --frozen pytest -q
+	@PATH="$(TEST_PATH)" uv run --frozen python -m pytest -q
 
-verify:
+check-clean:
+	@test -z "$$(git status --porcelain=v1 --untracked-files=all)" || (git status --short; echo "repository must be clean for verification" >&2; exit 1)
+
+verify: check-clean
 	@uv run --frozen python -m compileall -q broker owner_gateway qualification_adapters qualification_attestor qualification_verifier release_broker runtime_plugins scripts tests
 	@uv run --frozen python scripts/privacy-scan.py .
-	@PATH="$(TEST_PATH)" uv run --frozen pytest -q
+	@PATH="$(TEST_PATH)" uv run --frozen python -m pytest -q
 	@git diff --check
 	@git diff --cached --check
 	@git log -1 --check --format=
+	@$(MAKE) --no-print-directory check-clean
+
+clean-machine-ubuntu:
+	@./scripts/ubuntu-clean-machine-check.sh
 
 clean-machine-macos:
 	@./scripts/macos-clean-machine-check.sh
 
 broker-test:
-	@PATH="$(TEST_PATH)" uv run --frozen pytest -q tests/test_broker_*.py tests/test_comment_templates.py tests/test_protected_action_packets.py
+	@PATH="$(TEST_PATH)" uv run --frozen python -m pytest -q tests/test_broker_*.py tests/test_comment_templates.py tests/test_protected_action_packets.py
 
 release-broker-test:
-	@PATH="$(TEST_PATH)" uv run --frozen pytest -q tests/test_release_broker_*.py tests/test_release_owner_*.py tests/test_release_packets.py tests/test_release_runtime_approval.py tests/test_release_approval_plugin.py
+	@PATH="$(TEST_PATH)" uv run --frozen python -m pytest -q tests/test_release_broker_*.py tests/test_release_owner_*.py tests/test_release_packets.py tests/test_release_runtime_approval.py tests/test_release_approval_plugin.py
 
 persona-eval:
 	@test -n "$(PERSONA_EVAL_RUN)" || (echo "usage: make persona-eval PERSONA_EVAL_RUN=/private/run.json [PERSONA_EVAL_REPORT=/public/report.json]" >&2; exit 2)
@@ -93,10 +100,10 @@ persona-eval-verify:
 	@$(PRODUCT_PYTHON) scripts/john-lomein-persona-eval.py verify --report "$(PERSONA_EVAL_REPORT)" --pretty $(if $(strip $(PERSONA_EVAL_RUN)),--run "$(PERSONA_EVAL_RUN)",)
 
 persona-eval-fixtures:
-	@PATH="$(TEST_PATH)" uv run --frozen pytest -q tests/test_persona_evaluator.py
+	@PATH="$(TEST_PATH)" uv run --frozen python -m pytest -q tests/test_persona_evaluator.py
 
 persona-qualification-test:
-	@PATH="$(TEST_PATH)" uv run --frozen pytest -q \
+	@PATH="$(TEST_PATH)" uv run --frozen python -m pytest -q \
 		tests/test_doctor_protected_qualification.py \
 		tests/test_persona_evaluator.py \
 		tests/test_persona_qualification*.py \

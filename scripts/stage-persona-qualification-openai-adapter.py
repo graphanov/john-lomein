@@ -262,12 +262,6 @@ def _load_manifest(argument: Path) -> tuple[dict[str, Any], Path, Path]:
         raise StageError("instance-manifest-invalid-yaml") from exc
     if type(manifest) is not dict:
         raise StageError("instance-manifest-not-object")
-    try:
-        validate_manifest_contract(manifest)
-        canonical_role_profiles(manifest)
-    except (TypeError, ValueError) as exc:
-        raise StageError("instance-manifest-contract") from exc
-
     instance = manifest.get("instance")
     target = manifest.get("target")
     runtime = manifest.get("runtime")
@@ -277,6 +271,12 @@ def _load_manifest(argument: Path) -> tuple[dict[str, Any], Path, Path]:
         slug = safe_instance_slug(instance.get("slug"))
     except ValueError as exc:
         raise StageError("instance-slug") from exc
+    try:
+        validate_manifest_contract(manifest)
+        canonical_role_profiles(manifest)
+    except (TypeError, ValueError) as exc:
+        raise StageError("instance-manifest-contract") from exc
+
     checkout_value = target.get("local_checkout") or target.get("local")
     runtime_value = runtime.get("hermes_home")
     if checkout_value is None:

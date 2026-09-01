@@ -28,6 +28,22 @@ else
   [ -x "$RUNTIME_PYTHON" ] || RUNTIME_PYTHON="$(command -v python3)"
   PRODUCT_PYTHON=("$RUNTIME_PYTHON")
 fi
+require_isolated_gateway_assets() {
+  local runtime_home="$1"
+  local name path
+  for name in \
+    john_lomein_model_isolation.py \
+    john_lomein_provider_bootstrap.py \
+    john_lomein_provider_broker.py \
+    john_lomein_honcho_broker.py
+  do
+    path="$runtime_home/scripts/$name"
+    if [ ! -f "$path" ] || [ -L "$path" ]; then
+      echo "required isolated gateway asset missing or unsafe: $path" >&2
+      return 78
+    fi
+  done
+}
 if [ -z "${JOHN_LOMEIN_SERVICE_LOCK_FD:-}" ]; then
   exec "${PRODUCT_PYTHON[@]}" "$SERVICE_REGISTRY" run-locked -- bash "$0" "$1"
 fi
@@ -91,20 +107,26 @@ trap rollback_install ERR INT TERM
 write_plist() {
   local label="$1" plist="$2" profile="$3" stdout_path="$4" stderr_path="$5"
   local managed_dir="$BOT_HERMES_MANAGED_ROOT/$profile"
-  "${PRODUCT_PYTHON[@]}" - "$plist" "$label" "$HERMES_PYTHON" "$profile" "$BOT_HERMES_HOME" "$managed_dir" "$HERMES_VENV" "$stdout_path" "$stderr_path" "$HERMES_REAL_HOME" "$JOHN_LOMEIN_AUTH_AUTHORITY_HOME" "$BOT_HERMES_HOME/profiles/$profile/home/.config/gh" "${BOT_MODEL_PROVIDER:-}" "${BOT_FALLBACK_PROVIDER:-}" <<'PY'
+  "${PRODUCT_PYTHON[@]}" - "$plist" "$label" "$HERMES_PYTHON" "$profile" "$BOT_HERMES_HOME" "$managed_dir" "$HERMES_VENV" "$stdout_path" "$stderr_path" "$HERMES_REAL_HOME" "$JOHN_LOMEIN_AUTH_AUTHORITY_HOME" "$HERMES_GATEWAY_LOCK_DIR" "$BOT_HERMES_HOME/profiles/$profile/home/.config/gh" "${BOT_MODEL_MEMORY_ISOLATION:-required}" "${BOT_MODEL_PROVIDER:-}" "${BOT_FALLBACK_PROVIDER:-}" <<'PY'
 import plistlib, sys
-plist,label,py,profile,H,managed_dir,venv,out,err,real_home,auth_authority_home,gh_config,model_provider,fallback_provider=sys.argv[1:]
+plist,label,py,profile,H,managed_dir,venv,out,err,real_home,auth_authority_home,gateway_lock_dir,gh_config,isolation,model_provider,fallback_provider=sys.argv[1:]
 obj={
   'Label': label,
-  'ProgramArguments': [py, '-m', 'hermes_cli.main', '--profile', profile, 'gateway', 'run', '--replace'],
+  'ProgramArguments': [py, f'{H}/scripts/john_lomein_model_isolation.py', '--profile', profile, '--', py, '-I', '-m', 'hermes_cli.main', '--profile', profile, 'gateway', 'run', '--replace'],
   'WorkingDirectory': f'{H}/profiles/{profile}',
   'EnvironmentVariables': {
     'HERMES_HOME': H,
+    'HERMES_HONCHO_HOST': f'hermes_{profile}',
     'HERMES_MANAGED_DIR': managed_dir,
     'JOHN_LOMEIN_INSTANCE_HERMES_HOME': H,
     'JOHN_LOMEIN_HERMES_HOME': H,
+    'BOT_HERMES_HOME': H,
+    'BOT_MODEL_MEMORY_ISOLATION': isolation,
+    'BOT_STEWARD_PRIVATE_ROOT': f'{H}/private/learning-steward',
+    'BOT_STEWARD_PROJECTION_ROOT': f'{H}/state/learning',
     'HERMES_REAL_HOME': real_home,
     'JOHN_LOMEIN_AUTH_AUTHORITY_HOME': auth_authority_home,
+    'HERMES_GATEWAY_LOCK_DIR': gateway_lock_dir,
     # John owns scheduling through its exact instance crons and worker
     # supervisor; the generic Hermes Kanban dispatcher is deliberately idle.
     'HERMES_KANBAN_DISPATCH_IN_GATEWAY': '0',
@@ -146,6 +168,21 @@ then
   SCHED_REQUIRED=1
 fi
 if [ "$SCHED_REQUIRED" = "1" ]; then
+  require_isolated_gateway_assets "$BOT_HERMES_HOME"
+  HERMES_GATEWAY_LOCK_DIR="$("${PRODUCT_PYTHON[@]}" - \
+    "$BOT_HERMES_HOME" \
+    "$HERMES_REAL_HOME" <<'PY'
+import sys
+from pathlib import Path
+
+runtime, real_home = sys.argv[1:]
+sys.path.insert(0, str(Path(runtime) / "scripts"))
+from john_lomein_gateway_lock_contract import prepare_gateway_lock_root
+
+print(prepare_gateway_lock_root(Path(real_home)))
+PY
+  )"
+  export HERMES_GATEWAY_LOCK_DIR
   write_plist "$SCHED_LABEL" "$SCHED_PLIST" "$BOT_MAINTAINER_PROFILE" "$BOT_HERMES_HOME/logs/scheduler.launchd.log" "$BOT_HERMES_HOME/logs/scheduler.launchd.error.log"
   bootstrap_label "$SCHED_LABEL" "$SCHED_PLIST"
   echo "scheduler installed: $SCHED_LABEL runtime=$BOT_HERMES_HOME profile=$BOT_MAINTAINER_PROFILE"

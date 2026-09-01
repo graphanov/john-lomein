@@ -17,6 +17,23 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ProductAssetsTest(unittest.TestCase):
+    def test_release_identity_and_non_packageable_python_environment_are_explicit(self):
+        metadata = tomllib.loads(
+            (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        )
+        self.assertEqual(metadata["project"]["version"], "0.1.0")
+        self.assertIs(metadata["tool"]["uv"]["package"], False)
+        self.assertNotIn("build-system", metadata)
+
+        changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        self.assertIn("## 0.1.0", changelog)
+        self.assertIn("### Rollback", changelog)
+
+        security = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+        self.assertIn("Report a vulnerability", security)
+        self.assertIn("Private security reporting channel requested", security)
+        self.assertIn("Do not put vulnerability details", security)
+
     def test_open_source_and_macos_release_assets_are_present(self):
         for name in (
             "LICENSE",
@@ -40,6 +57,15 @@ class ProductAssetsTest(unittest.TestCase):
         clean_machine = ROOT / "scripts" / "macos-clean-machine-check.sh"
         self.assertTrue(clean_machine.is_file())
         self.assertTrue(clean_machine.stat().st_mode & 0o111)
+        ubuntu_clean_machine = (
+            ROOT / "scripts" / "ubuntu-clean-machine-check.sh"
+        )
+        self.assertTrue(ubuntu_clean_machine.is_file())
+        self.assertTrue(ubuntu_clean_machine.stat().st_mode & 0o111)
+        self.assertEqual(
+            workflow["jobs"]["verify"]["steps"][-2]["run"],
+            "make clean-machine-ubuntu",
+        )
         discord_layout = json.loads(
             (ROOT / "templates" / "discord-pilot-layout.json").read_text(
                 encoding="utf-8"
@@ -106,7 +132,7 @@ class ProductAssetsTest(unittest.TestCase):
         )
         self.assertIn("set -euo pipefail;", smoke_all)
 
-    def test_oauth_refresh_authority_is_brokered_not_copied_into_profiles(self):
+    def test_provider_credentials_are_controller_brokered_not_projected(self):
         deploy = (
             ROOT / "scripts" / "deploy-instance.sh"
         ).read_text(encoding="utf-8")
@@ -131,13 +157,16 @@ class ProductAssetsTest(unittest.TestCase):
         )
         self.assertNotIn('BOT_REVIEW_ONLY_PROFILES_QUALIFIED={sq("0")}', deploy)
         self.assertLess(
-            deploy.index("john_lomein_auth_projection.py\" sync"),
+            deploy.index("john_lomein_auth_projection.py\" scrub"),
             deploy.index("deployed continuity hook canary failed"),
         )
-        self.assertIn("sync_projection(", isolation)
+        self.assertIn("scrub_model_credentials(", isolation)
+        self.assertIn("john_lomein_provider_broker.py", deploy)
+        self.assertIn("john_lomein_provider_bootstrap.py", deploy)
+        self.assertIn("john_lomein_honcho_broker.py", deploy)
         self.assertIn("_hidden_credential_paths(", isolation)
         self.assertIn('"--ro-bind", "/dev/null", str(path)', isolation)
-        self.assertIn("john_lomein_auth_projection.py\" sync", watchdog)
+        self.assertIn("john_lomein_auth_projection.py\" scrub", watchdog)
         self.assertIn("JOHN_LOMEIN_AUTH_AUTHORITY_HOME", guide)
 
     def test_signed_continuity_importer_is_deployed_and_consumed(self):
@@ -873,7 +902,10 @@ class ProductAssetsTest(unittest.TestCase):
         self.assertIn("hermes_direct_fallback: blocked_only", text)
         self.assertIn("memory:", text)
         self.assertIn("provider: honcho", text)
-        self.assertIn("base_url: http://127.0.0.1:8000", text)
+        self.assertIn("service_mode: dedicated_public", text)
+        self.assertIn("checkout_commit: 9379c634ed240d0225b63443606e5304a4e261c5", text)
+        self.assertIn("retention_interval_seconds: 300", text)
+        self.assertNotIn("base_url: http://127.0.0.1:8000", text)
         self.assertIn("guide_save_messages: true", text)
         self.assertIn("learning:", text)
         self.assertIn("learning_steward: john-lomein-learning-steward", text)

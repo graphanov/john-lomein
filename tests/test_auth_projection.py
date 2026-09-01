@@ -187,6 +187,32 @@ class AuthProjectionTest(unittest.TestCase):
         )
         self.assertEqual(verified["targets"], 1 + len(self.profiles))
 
+    def test_scrub_removes_all_codex_material_without_reading_authority(self):
+        for home in [self.runtime, *self.profiles]:
+            self._write(home / "auth.json", self._existing_projection())
+
+        result = projection.scrub_model_credentials(
+            self.runtime,
+            profiles=self.profiles,
+            provider=projection.PROVIDER,
+        )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["targets"], 1 + len(self.profiles))
+        for home in [self.runtime, *self.profiles]:
+            payload = json.loads((home / "auth.json").read_text(encoding="utf-8"))
+            self.assertNotIn(projection.PROVIDER, payload["providers"])
+            self.assertNotIn(projection.PROVIDER, payload["credential_pool"])
+            self.assertNotIn(projection.PROVIDER, payload["suppressed_sources"])
+            self.assertNotEqual(payload.get("active_provider"), projection.PROVIDER)
+            self.assertEqual(payload["providers"]["zai"], {"api_key": "old-zai"})
+        verified = projection.verify_model_credentials_scrubbed(
+            self.runtime,
+            profiles=self.profiles,
+            provider=projection.PROVIDER,
+        )
+        self.assertEqual(verified["status"], "ok")
+
     def test_non_openai_provider_is_a_true_noop(self):
         result = projection.sync_projection(
             Path("/does/not/exist"),

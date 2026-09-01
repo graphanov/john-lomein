@@ -7,9 +7,11 @@ import json
 import os
 import sys
 import tempfile
+import types
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -491,6 +493,29 @@ class LearningStewardTest(unittest.TestCase):
 
     def test_reconcile_writes_profile_native_memory_and_candidate_artifacts(self):
         mod = load_learning()
+
+        class FixtureMnemosyne:
+            records: dict[str, dict] = {}
+
+            def __init__(self, *, bank, **_kwargs):
+                self.bank = bank
+
+            def update(self, memory_id, **_kwargs):
+                return memory_id in self.records
+
+            def remember(self, content, **_kwargs):
+                memory_id = f"memory-{self.bank}"
+                self.records[memory_id] = {"id": memory_id, "content": content}
+                return memory_id
+
+            def get(self, memory_id):
+                return self.records.get(memory_id)
+
+            def recall(self, *_args, **_kwargs):
+                return list(self.records.values())
+
+        provider = types.ModuleType("mnemosyne")
+        provider.Mnemosyne = FixtureMnemosyne
         with tempfile.TemporaryDirectory() as d:
             _, _, runtime = self.make_instance(Path(d))
             old = os.environ.copy()
@@ -514,8 +539,13 @@ class LearningStewardTest(unittest.TestCase):
                         },
                     )
                 out = io.StringIO()
-                with redirect_stdout(out):
-                    code = mod.main(["reconcile", "--mode", "manual", "--json"])
+                with (
+                    mock.patch.dict(sys.modules, {"mnemosyne": provider}),
+                    redirect_stdout(out),
+                ):
+                    code = mod.main(
+                        ["reconcile", "--mode", "manual", "--json"]
+                    )
                 report = json.loads((runtime / "state" / "learning" / "learning-report.json").read_text(encoding="utf-8"))
                 self.assertEqual(code, 0)
                 self.assertTrue((runtime / "state" / "learning" / "current-operating-brief.md").exists())

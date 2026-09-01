@@ -2060,9 +2060,13 @@ class PersonaQualificationCaptureStagingTests(unittest.TestCase):
         lease = self.create(shared_root, "9" * 64)
         leaf = lease.leaf_path
         lease._abandon_for_test()
-        leaf.rmdir()
-        leaf.mkdir(mode=staging.EXPOSED_LEAF_MODE)
-        leaf.chmod(staging.EXPOSED_LEAF_MODE)
+        original_fd = os.open(leaf, os.O_RDONLY)
+        try:
+            leaf.rmdir()
+            leaf.mkdir(mode=staging.EXPOSED_LEAF_MODE)
+            leaf.chmod(staging.EXPOSED_LEAF_MODE)
+        finally:
+            os.close(original_fd)
         self.assert_code(
             "capture_staging_recovery_leaf_identity_mismatch",
             self.create,

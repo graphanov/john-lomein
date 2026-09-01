@@ -23,6 +23,18 @@ from qualification_attestor import (  # noqa: E402
 )
 
 
+def darwin_test_python() -> Path:
+    framework = (
+        Path(sys.base_prefix)
+        / "Resources"
+        / "Python.app"
+        / "Contents"
+        / "MacOS"
+        / "Python"
+    )
+    return framework if framework.is_file() else Path(sys.executable).resolve()
+
+
 class PersonaQualificationSandboxTests(unittest.TestCase):
     def policy(
         self,
@@ -250,7 +262,7 @@ class PersonaQualificationSandboxTests(unittest.TestCase):
             scratch = root / "scratch"
             capture.mkdir()
             scratch.mkdir()
-            python_path = Path(sys.executable).resolve()
+            python_path = darwin_test_python()
             bundle_root = Path(sys.base_prefix).resolve()
             policy = sandbox.QualificationSandboxPolicy(
                 system="Darwin",

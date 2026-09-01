@@ -27,6 +27,18 @@ from qualification_attestor import (  # noqa: E402
 )
 
 
+def darwin_test_python() -> Path:
+    framework = (
+        Path(sys.base_prefix)
+        / "Resources"
+        / "Python.app"
+        / "Contents"
+        / "MacOS"
+        / "Python"
+    )
+    return framework if framework.is_file() else Path(sys.executable).resolve()
+
+
 class _FakeLease:
     def __init__(self, *, marker: Path | None = None) -> None:
         self.snapshot_root = Path(
@@ -782,7 +794,7 @@ class PersonaQualificationCaptureHelperTests(unittest.TestCase):
         "requires macOS Seatbelt",
     )
     def test_darwin_helper_profile_starts_isolated_python(self) -> None:
-        python_path = Path(sys.executable).resolve()
+        python_path = darwin_test_python()
         bundle_root = Path(sys.base_prefix).resolve()
         policy = replace(
             self.policy(system="Darwin"),

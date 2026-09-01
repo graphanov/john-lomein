@@ -357,6 +357,40 @@ def _observation_matches_runtime(
     return bool(observed) and canonical_path(observed) == runtime_home
 
 
+def _command_identity_uses_model_isolation(
+    command_identity: Any,
+    runtime_home: Path,
+) -> bool:
+    try:
+        values = json.loads(str(command_identity))
+    except (TypeError, ValueError):
+        return False
+    expected_wrapper = runtime_home / "scripts" / "john_lomein_model_isolation.py"
+    return (
+        isinstance(values, list)
+        and len(values) >= 3
+        and isinstance(values[2], str)
+        and canonical_path(values[2]) == expected_wrapper
+    )
+
+
+def _observation_uses_model_isolation(
+    observation: Mapping[str, Any] | None,
+    runtime_home: Path,
+) -> bool:
+    if observation is None:
+        return False
+    identities = [
+        observation.get(key)
+        for key in ("plist_command", "loaded_command")
+        if observation.get(key) is not None
+    ]
+    return bool(identities) and all(
+        _command_identity_uses_model_isolation(identity, runtime_home)
+        for identity in identities
+    )
+
+
 def _observation_points_at_runtime(
     observation: Mapping[str, Any],
     runtime_home: Path,
@@ -475,10 +509,20 @@ def _record_services_unlocked(
             f"or uninstall before installing another instance: {label}"
         )
     for kind, label in normalized.items():
-        if not _observation_matches_runtime(
-            label,
-            observations.get(label),
-            runtime_path,
+        observation = observations.get(label)
+        if (
+            not _observation_matches_runtime(
+                label,
+                observation,
+                runtime_path,
+            )
+            or (
+                kind in {"guide", "scheduler"}
+                and not _observation_uses_model_isolation(
+                    observation,
+                    runtime_path,
+                )
+            )
         ):
             raise ServiceRegistryError(
                 f"cannot register {kind}={label}: plist/loaded service identity "
@@ -589,7 +633,7 @@ def _service_command_identity(
         if kind == "guide"
         else "john-lomein-maintainer"
     )
-    if kind == "guide" and len(program_arguments) in {13, 14}:
+    if kind in {"guide", "scheduler"} and len(program_arguments) in {13, 14}:
         expected_wrapper = (
             runtime_path / "scripts" / "john_lomein_model_isolation.py"
         )
@@ -630,7 +674,7 @@ def _service_command_identity(
             ],
             separators=(",", ":"),
         )
-    # Retain recognition of the former unwrapped Guide command solely so a
+    # Retain recognition of former unwrapped model commands solely so a
     # pre-boundary service can be discovered and safely uninstalled/adopted
     # during migration. The current installer never writes this form and
     # Doctor rejects it for a required-isolation instance.

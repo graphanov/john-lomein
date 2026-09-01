@@ -198,10 +198,12 @@ do
     ''|*[!0-9]*) die "resolved UID/GID values are invalid" ;;
   esac
 done
-[ "$SIGNER_UID" -gt 0 ] && [ "$REQUESTER_UID" -gt 0 ] ||
+if [ "$SIGNER_UID" -le 0 ] || [ "$REQUESTER_UID" -le 0 ]; then
   die "signer and requester users must not be root"
-[ "$SIGNER_GID" -gt 0 ] && [ "$SUBMIT_GID" -gt 0 ] ||
+fi
+if [ "$SIGNER_GID" -le 0 ] || [ "$SUBMIT_GID" -le 0 ]; then
   die "signer and submit groups must not be the root group"
+fi
 [ "$SIGNER_UID" -ne "$REQUESTER_UID" ] ||
   die "signer and requester must be different OS identities"
 [ "$SIGNER_GID" -ne "$SUBMIT_GID" ] ||
@@ -310,8 +312,9 @@ validate_existing_path() {
   case "$final_kind" in
     file) [ -f "$path" ] || die "$label must be a regular file" ;;
     executable)
-      [ -f "$path" ] && [ -x "$path" ] ||
+      if [ ! -f "$path" ] || [ ! -x "$path" ]; then
         die "$label must be an executable regular file"
+      fi
       ;;
     directory) [ -d "$path" ] || die "$label must be a directory" ;;
     any) ;;
@@ -549,8 +552,9 @@ for kind, value in sorted(paths):
         print(f"{kind}\t{value}")
 ' >"$PYTHON_REPORT"
 while IFS=$'\t' read -r path_kind runtime_path; do
-  [ -n "$path_kind" ] && [ -n "$runtime_path" ] ||
+  if [ -z "$path_kind" ] || [ -z "$runtime_path" ]; then
     die "Python runtime path report is malformed"
+  fi
   [ "$path_kind" != "executable" ] || [ "$runtime_path" = "$PYTHON" ] ||
     die "Python sys.executable differs from the supplied interpreter"
   validate_runtime_path "$runtime_path" "Python $path_kind"
@@ -589,8 +593,9 @@ for kind, value in sorted(reported):
         print(f"{kind}\t{value}")
 ' >"$CRYPTOGRAPHY_REPORT"
 while IFS=$'\t' read -r path_kind runtime_path; do
-  [ -n "$path_kind" ] && [ -n "$runtime_path" ] ||
+  if [ -z "$path_kind" ] || [ -z "$runtime_path" ]; then
     die "cryptography path report is malformed"
+  fi
   validate_runtime_path "$runtime_path" "$path_kind"
 done <"$CRYPTOGRAPHY_REPORT"
 
@@ -825,12 +830,14 @@ ensure_exact_directory() {
   local label="$7"
   local parent
   if [ -e "$path" ] || [ -L "$path" ]; then
-    [ ! -L "$path" ] && [ -d "$path" ] ||
+    if [ -L "$path" ] || [ ! -d "$path" ]; then
       die "$label is not a safe directory"
+    fi
   else
     parent="$(/usr/bin/dirname "$path")"
-    [ -d "$parent" ] && [ ! -L "$parent" ] ||
+    if [ ! -d "$parent" ] || [ -L "$parent" ]; then
       die "$label parent is unsafe"
+    fi
     /usr/bin/install -d -o "$owner" -g "$group" -m "$mode" "$path"
   fi
   [ "$(/usr/bin/stat -f '%u' "$path")" -eq "$owner_uid" ] ||
@@ -1125,8 +1132,9 @@ install_managed_file() {
 TRANSACTION_STARTED=1
 FILES_MUTATED=1
 if [ -e "$CODE_ROOT" ] || [ -L "$CODE_ROOT" ]; then
-  [ -d "$CODE_ROOT" ] && [ ! -L "$CODE_ROOT" ] ||
+  if [ ! -d "$CODE_ROOT" ] || [ -L "$CODE_ROOT" ]; then
     die "installed owner gateway code root is unsafe"
+  fi
   CODE_BACKUP="$TEMP_DIR/code.backup"
   /bin/mv "$CODE_ROOT" "$CODE_BACKUP"
 fi

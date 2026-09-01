@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import hashlib
 import json
 import os
 import sys
@@ -23,6 +24,11 @@ from release_broker import john_lomein_release_broker_protocol as protocol
 
 
 NOW = datetime(2026, 7, 16, 12, 0, tzinfo=timezone.utc)
+
+
+def short_socket_path(root: Path) -> Path:
+    digest = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
+    return Path(tempfile.gettempdir()).resolve() / f"jlr-{digest}.sock"
 
 
 def release_bundle(
@@ -167,7 +173,7 @@ def release_config(root: Path) -> dict:
         "transport": {
             "kind": protocol.TRANSPORT_KIND,
             "peer_credentials": protocol.PEER_CREDENTIAL_PROTOCOL,
-            "socket_path": str(root / "run" / "release.sock"),
+            "socket_path": str(short_socket_path(root)),
             "requester_uid": uid + 1,
             "submit_gid": submit_gid,
             "max_request_bytes": 1024 * 1024,

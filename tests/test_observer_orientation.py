@@ -341,7 +341,12 @@ class ObserverOrientationTest(unittest.TestCase):
         manifest["memory"]["honcho"].update({
             "watchdog_enabled": True,
             "expected_memory_model": "honcho-memory:test",
-            "server_root": str(self.instance / "honcho"),
+            "server_root": str(
+                Path(manifest["runtime"]["hermes_home"])
+                / "services"
+                / "public-honcho"
+                / "server"
+            ),
         })
         self.write_manifest(manifest)
         self.deploy_local_proof()

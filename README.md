@@ -34,6 +34,12 @@ The instance slug is used only for outer paths and collision-prone labels such a
 
 The product also installs an instance-local `john-lomein-learning-steward` profile/job. Operational roles emit structured observations after runs; the deterministic steward script writes generated non-canonical operating briefs, projects a compact private semantic index of bounded counts and pattern fingerprints into configured Mnemosyne banks, and quarantines candidate improvements behind review gates. Mnemosyne is never an agent memory provider. Operational profiles use the configured local Honcho workspace instead: Guide can save identity-separated user messages, while autonomous workers use context recall with `saveMessages: false`. Model-facing `memory` and `session_search` toolsets remain suppressed, and role-specific managed policies pin the effective boundary above profile YAML.
 
+Sandboxed Hermes reaches that local workspace only through a second
+controller-owned, per-process Unix socket. The broker pins the protected
+profile's exact workspace and loopback origin, denies workspace enumeration and
+destructive/admin routes, and does not expose Honcho, PostgreSQL, or Redis TCP
+sockets to the model namespace.
+
 Cross-session persona continuity is a separate product-owned contract. A
 typed, privacy-scoped, hash-chained ledger stores only bounded decisions,
 objections, refusals, and commitments accepted from deterministic automation;
@@ -119,10 +125,12 @@ dormant observer posture: activation remains owner-gated; mutation, Discord,
 Guide, portfolio, protected release, and keep-awake remain off; delivery is
 local. Confirmation does not deploy the changed manifest, start a service, or
 grant reactivation. Reconciliation and any later reactivation are separate
-owner actions. Local verification passed
-1,842 tests plus 2,062 subtests, Python compilation, privacy scan, shell syntax,
-and diff checks. Live owner adoption, observer reconciliation, and any later
-reactivation remain separate evidence.
+owner actions. The verification contract runs the complete collected test
+suite plus Python compilation, privacy scan, shell syntax, and repository diff
+checks. Pytest reports the exact platform-specific test and subtest totals for
+each run; the documentation does not freeze a count that changes with
+platform-only tests. Live owner adoption, observer reconciliation, and any
+later reactivation remain separate evidence.
 
 The filesystem boundary itself is implemented for macOS and Linux, but the
 turnkey service installer is currently macOS-only (`launchd`). On Linux,
@@ -175,6 +183,15 @@ make broker-test
 make privacy-scan
 make verify
 ```
+
+## Python distribution status
+
+`pyproject.toml` defines the locked `uv` execution environment and the 0.1.0
+product identity. This repository is an appliance source tree, not a Python
+wheel or source distribution: `[tool.uv] package = false` is intentional, no
+PEP 517 build backend is declared, and `uv build` is not a supported release
+operation. Release artifacts are the reviewed repository contents and the
+separately generated runtime assets described in this documentation.
 
 ## Persona qualification
 

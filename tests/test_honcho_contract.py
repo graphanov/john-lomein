@@ -27,10 +27,10 @@ class HonchoContractTest(unittest.TestCase):
     def manifest(self) -> dict:
         return {
             "authority": {"owner_approvers": ["owner-id"]},
+            "runtime": {"hermes_home": "/tmp/john-lomein-honcho-contract/runtime"},
             "memory": {
                 "provider": "honcho",
                 "honcho": {
-                    "base_url": "http://127.0.0.1:8000",
                     "workspace": "workspace",
                     "owner_peer": "Owner",
                     "guide_save_messages": True,
@@ -170,12 +170,13 @@ class HonchoContractTest(unittest.TestCase):
         deploy = (root / "scripts" / "deploy-instance.sh").read_text(encoding="utf-8")
         doctor = (root / "scripts" / "doctor-instance.py").read_text(encoding="utf-8")
         self.assertIn("write_profile_honcho_config(", deploy)
-        self.assertIn("probe_honcho_health(", deploy)
+        self.assertNotIn("probe_honcho_health(settings", deploy)
+        self.assertIn("public-service-install", deploy)
         self.assertIn("unset HERMES_HONCHO_HOST", deploy)
         self.assertIn("john_lomein_honcho_contract.py", deploy)
         self.assertIn("profile_honcho_errors(", doctor)
         self.assertIn("local Honcho contract is exact", doctor)
-        self.assertIn("local Honcho provider is reachable", doctor)
+        self.assertIn("dedicated public Honcho provider is reachable", doctor)
 
 
 if __name__ == "__main__":

@@ -49,7 +49,13 @@ CONTROLLED_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbi
 MAX_ALIAS_SCAN_ENTRIES = 500_000
 CONTINUITY_PLUGIN = "john-lomein-continuity"
 RELEASE_APPROVAL_PLUGIN = "john-lomein-release-approval"
+GUIDE_LIFECYCLE_PLUGIN = "john-lomein-guide-lifecycle"
 OPENAI_CODEX_PROVIDER = "openai-codex"
+PROVIDER_BROKER_SCRIPT = "john_lomein_provider_broker.py"
+PROVIDER_BOOTSTRAP_SCRIPT = "john_lomein_provider_bootstrap.py"
+PROVIDER_SOCKET_NAME = "broker.sock"
+HONCHO_SOCKET_NAME = "honcho.sock"
+PROVIDER_SESSION_RE = re.compile(r"^[0-9a-f]{24}$")
 PROFILE_ROLE_BY_NAME = {
     profile: role for role, profile in CANONICAL_ROLE_PROFILES.items()
 }
@@ -100,6 +106,59 @@ def _uses_openai_codex(env: Mapping[str, str]) -> bool:
         str(env.get("BOT_MODEL_PROVIDER") or "").strip(),
         str(env.get("BOT_FALLBACK_PROVIDER") or "").strip(),
     }
+
+
+def _provider_broker_root() -> Path:
+    """Return a short, deterministic per-UID root outside long instance paths."""
+
+    try:
+        temporary = Path("/tmp").resolve(strict=True)
+    except OSError as exc:
+        raise IsolationError("model_isolation_provider_tmp_unavailable") from exc
+    return temporary / f"jl-pb-{os.geteuid()}"
+
+
+def provider_broker_socket_path() -> Path:
+    """Return a fresh portable AF_UNIX path for one controller/model pair."""
+
+    path = (
+        _provider_broker_root()
+        / secrets.token_hex(12)
+        / PROVIDER_SOCKET_NAME
+    )
+    if len(os.fsencode(path)) > 100:
+        raise IsolationError("model_isolation_provider_socket_path_too_long")
+    return path
+
+
+def honcho_broker_socket_path(provider_socket: Path) -> Path:
+    """Return the second fixed sibling socket for one model process."""
+
+    provider = _validate_provider_socket_path(provider_socket)
+    path = provider.with_name(HONCHO_SOCKET_NAME)
+    if len(os.fsencode(path)) > 100:
+        raise IsolationError("model_isolation_honcho_socket_path_too_long")
+    return path
+
+
+def _validate_provider_socket_path(path: Path) -> Path:
+    candidate = Path(os.path.abspath(path.expanduser()))
+    if (
+        candidate.name != PROVIDER_SOCKET_NAME
+        or candidate.parent.parent != _provider_broker_root()
+        or not PROVIDER_SESSION_RE.fullmatch(candidate.parent.name)
+        or len(os.fsencode(candidate)) > 100
+    ):
+        raise IsolationError("model_isolation_provider_socket_outside_runtime")
+    return candidate
+
+
+def _validate_honcho_socket_path(path: Path, provider_socket: Path) -> Path:
+    candidate = Path(os.path.abspath(path.expanduser()))
+    expected = honcho_broker_socket_path(provider_socket)
+    if candidate != expected:
+        raise IsolationError("model_isolation_honcho_socket_outside_runtime")
+    return candidate
 
 
 def _absolute_no_symlink(path: Path, *, label: str, must_exist: bool = True) -> Path:
@@ -312,11 +371,9 @@ def _hidden_credential_paths(
     """Credential stores a model must never read through another home."""
 
     home = _runtime_home(env)
-    # Hermes intentionally consults the instance-root auth store as the global
-    # fallback for a selected profile. It is an access-only projection of the
-    # same token and remains write-sealed; concealing it would prevent Hermes
-    # from resolving even the active profile credential.
-    candidates: list[Path] = []
+    # Provider resolution is controller-brokered. Model processes have no
+    # reason to read any runtime, profile, host, or CLI credential store.
+    candidates: list[Path] = [home / "auth.json"]
     authority = _auth_authority_home(
         env,
         required=_uses_openai_codex(env),
@@ -326,11 +383,10 @@ def _hidden_credential_paths(
     candidates.extend(
         root / "auth.json"
         for root in _profile_roots(home)
-        if active_profile is None or root != active_profile
     )
     candidates.extend(root / "home" / ".config" / "gh" for root in _profile_roots(home))
     real_home = Path(str(env.get("HERMES_REAL_HOME") or Path.home())).expanduser().resolve()
-    for relative in (".ssh", ".gnupg", ".git-credentials", ".netrc", ".gitcookies", ".npmrc", ".pypirc", ".config/gh", ".config/git", ".config/hub", ".config/gcloud", ".aws", ".azure", ".kube", ".docker", "Library/Keychains", "Library/Application Support/GitHub CLI"):
+    for relative in (".ssh", ".gnupg", ".git-credentials", ".netrc", ".gitcookies", ".npmrc", ".pypirc", ".config/gh", ".config/git", ".config/hub", ".config/gcloud", ".aws", ".azure", ".kube", ".docker", ".codex", "Library/Keychains", "Library/Application Support/GitHub CLI"):
         candidates.append(real_home / relative)
     return list(
         dict.fromkeys(
@@ -481,7 +537,7 @@ def _validate_profile_plugin_bindings(
     """Validate the exact product plugin aliases installed in a profile.
 
     Deployed profiles bind their executable hooks to the single protected
-    runtime copy.  Arbitrary aliases remain forbidden: only the two named
+    runtime copy.  Arbitrary aliases remain forbidden: only the role's named
     product hooks may be links, each must resolve to its exact runtime plugin
     directory, and those targets are validated as protected trees separately.
     """
@@ -501,7 +557,11 @@ def _validate_profile_plugin_bindings(
             f"model_isolation_runtime_plugins_directory_unsafe:"
             f"{runtime_plugins}"
         )
-    for plugin_name in (CONTINUITY_PLUGIN, RELEASE_APPROVAL_PLUGIN):
+    for plugin_name in (
+        CONTINUITY_PLUGIN,
+        RELEASE_APPROVAL_PLUGIN,
+        GUIDE_LIFECYCLE_PLUGIN,
+    ):
         _validate_protected_tree(
             runtime_plugins / plugin_name,
             label=f"runtime_plugin_{plugin_name.replace('-', '_')}",
@@ -525,7 +585,9 @@ def _validate_profile_plugin_bindings(
         )
     expected_names = {CONTINUITY_PLUGIN}
     if role == "guide":
-        expected_names.add(RELEASE_APPROVAL_PLUGIN)
+        expected_names.update(
+            {RELEASE_APPROVAL_PLUGIN, GUIDE_LIFECYCLE_PLUGIN}
+        )
     observed = {entry.name: entry for entry in root.iterdir()}
     if set(observed) != expected_names:
         raise IsolationError(
@@ -708,6 +770,8 @@ def darwin_policy(
     *,
     allow_projection: bool = True,
     profile: str | None = None,
+    provider_socket: Path | None = None,
+    honcho_socket: Path | None = None,
 ) -> str:
     """Build a Seatbelt policy with private reads and policy writes denied."""
 
@@ -722,6 +786,17 @@ def darwin_policy(
     lines = [
         "(version 1)",
         "(allow default)",
+        # Model tools may not connect to Honcho, PostgreSQL, loopback services,
+        # or the public network. The controller's per-process Unix broker is
+        # the sole provider transport reopened below.
+        "(deny network*)",
+        # The controller broker contains the real provider credential. Deny
+        # process enumeration/task-port access to ancestors and sibling roles,
+        # while retaining the self-inspection Python and Hermes need.
+        "(deny process-info*)",
+        "(allow process-info* (target self))",
+        "(deny mach-task-name)",
+        "(allow mach-task-name (target self))",
         # Same UID is not a write boundary. Make the model namespace read-only
         # by default, then reopen only the explicit work/state/session roots.
         "(deny file-write*)",
@@ -752,6 +827,23 @@ def darwin_policy(
             f"(subpath {_scheme_string(_policy_path(projection))}))"
         ),
     ]
+    if provider_socket is not None:
+        socket_path = _validate_provider_socket_path(provider_socket)
+        lines.append(
+            "(allow network-outbound "
+            f"(literal {_scheme_string(_policy_path(socket_path))}))"
+        )
+    if honcho_socket is not None:
+        if provider_socket is None:
+            raise IsolationError("model_isolation_honcho_provider_socket_missing")
+        socket_path = _validate_honcho_socket_path(
+            honcho_socket,
+            provider_socket,
+        )
+        lines.append(
+            "(allow network-outbound "
+            f"(literal {_scheme_string(_policy_path(socket_path))}))"
+        )
     lines.extend([
         '(deny process-exec (literal "/usr/bin/security"))',
         '(deny mach-lookup (global-name "com.apple.securityd"))',
@@ -978,6 +1070,50 @@ def _isolate_hermes_python_entrypoint(command: list[str]) -> list[str]:
     return [interpreter, "-I", str(executable), *command[1:]]
 
 
+def _is_hermes_invocation(command: Sequence[str]) -> bool:
+    if not command:
+        return False
+    if Path(str(command[0])).name == "hermes":
+        return True
+    return any(
+        str(command[index]) == "-m"
+        and index + 1 < len(command)
+        and str(command[index + 1]) == "hermes_cli.main"
+        for index in range(1, len(command))
+    )
+
+
+def _provider_bootstrap_command(
+    command: list[str],
+    *,
+    bootstrap: Path,
+) -> list[str]:
+    """Run the Hermes entrypoint only after installing the UDS transport."""
+
+    if len(command) >= 3 and command[1] == "-I" and Path(command[2]).name == "hermes":
+        return [
+            command[0],
+            "-I",
+            str(bootstrap),
+            command[2],
+            *command[3:],
+        ]
+    for index in range(1, len(command) - 1):
+        if command[index : index + 2] == ["-m", "hermes_cli.main"]:
+            prefix = [item for item in command[1:index] if item != "-I"]
+            if prefix:
+                raise IsolationError("model_isolation_hermes_module_flags_unsupported")
+            return [
+                command[0],
+                "-I",
+                str(bootstrap),
+                "--module",
+                "hermes_cli.main",
+                *command[index + 2 :],
+            ]
+    raise IsolationError("model_isolation_provider_bootstrap_not_hermes")
+
+
 def backend_name(
     *,
     system: str | None = None,
@@ -1008,16 +1144,35 @@ def isolated_command(
     which: object = shutil.which,
     allow_projection: bool = True,
     profile: str | None = None,
+    provider_socket: Path | None = None,
+    honcho_socket: Path | None = None,
 ) -> list[str]:
     """Return an OS-sandboxed command for a model-facing process."""
 
     resolved = _resolve_command(command, env)
+    hermes_invocation = _is_hermes_invocation(resolved)
     active_profile = _active_profile_root(env, profile)
-    if active_profile is not None:
+    if active_profile is not None and Path(resolved[0]).name == "hermes":
         resolved = _isolate_hermes_python_entrypoint(resolved)
     if _mode(env) == MODE_DISABLED:
         return resolved
     home = _runtime_home(env)
+    brokered_provider = bool(
+        active_profile is not None
+        and hermes_invocation
+        and _uses_openai_codex(env)
+    )
+    if brokered_provider:
+        bootstrap = home / "scripts" / PROVIDER_BOOTSTRAP_SCRIPT
+        if bootstrap.is_symlink() or not bootstrap.is_file():
+            raise IsolationError("model_isolation_provider_bootstrap_missing")
+        resolved = _provider_bootstrap_command(resolved, bootstrap=bootstrap)
+        if provider_socket is None:
+            provider_socket = provider_broker_socket_path()
+        if honcho_socket is None:
+            honcho_socket = honcho_broker_socket_path(provider_socket)
+        else:
+            _validate_honcho_socket_path(honcho_socket, provider_socket)
     protected = private_root(env)
     _validate_private_tree(protected)
     _validate_protected_deployment(home)
@@ -1038,16 +1193,37 @@ def isolated_command(
         sandbox = lookup("sandbox-exec", path=CONTROLLED_PATH)
         if not sandbox:
             raise IsolationError("model_isolation_seatbelt_unavailable")
-        return [
+        sandboxed = [
             str(sandbox),
             "-p",
             darwin_policy(
                 env,
                 allow_projection=allow_projection,
                 profile=profile,
+                provider_socket=provider_socket,
+                honcho_socket=honcho_socket,
             ),
             *resolved,
         ]
+        if brokered_provider:
+            assert provider_socket is not None and profile is not None
+            broker = home / "scripts" / PROVIDER_BROKER_SCRIPT
+            if broker.is_symlink() or not broker.is_file():
+                raise IsolationError("model_isolation_provider_broker_missing")
+            return [
+                sys.executable,
+                "-I",
+                str(broker),
+                "--socket",
+                str(provider_socket),
+                "--profile",
+                profile,
+                "--honcho-socket",
+                str(honcho_socket),
+                "--",
+                *sandboxed,
+            ]
+        return sandboxed
 
     bwrap = lookup("bwrap", path=CONTROLLED_PATH)
     if not bwrap:
@@ -1059,7 +1235,6 @@ def isolated_command(
         "--die-with-parent",
         "--new-session",
         "--unshare-all",
-        "--share-net",
         "--ro-bind",
         "/",
         "/",
@@ -1070,6 +1245,8 @@ def isolated_command(
         "/proc",
         "--tmpfs",
         "/tmp",
+        "--tmpfs",
+        "/run",
     ]
     real_home_raw = str(env.get("HERMES_REAL_HOME") or "").strip()
     if not real_home_raw:
@@ -1082,6 +1259,11 @@ def isolated_command(
         args.extend(("--ro-bind", str(local_path), str(local_path)))
     if Path("/usr/bin/security").exists():
         args.extend(("--ro-bind", "/dev/null", "/usr/bin/security"))
+    if provider_socket is not None:
+        socket_path = _validate_provider_socket_path(provider_socket)
+        # The controller creates this private session directory before bwrap
+        # starts. Expose it read-only after the namespace-local /tmp mount.
+        args.extend(("--ro-bind", str(socket_path.parent), str(socket_path.parent)))
     for root in _model_writable_roots(
         env,
         active_profile=active_profile,
@@ -1126,6 +1308,24 @@ def isolated_command(
         legacy = _real_directory(legacy, label="model_isolation_legacy_memory")
         args.extend(("--tmpfs", str(legacy)))
     args.extend(("--", *resolved))
+    if brokered_provider:
+        assert provider_socket is not None and profile is not None
+        broker = home / "scripts" / PROVIDER_BROKER_SCRIPT
+        if broker.is_symlink() or not broker.is_file():
+            raise IsolationError("model_isolation_provider_broker_missing")
+        return [
+            sys.executable,
+            "-I",
+            str(broker),
+            "--socket",
+            str(provider_socket),
+            "--profile",
+            profile,
+            "--honcho-socket",
+            str(honcho_socket),
+            "--",
+            *args,
+        ]
     return args
 
 
@@ -1137,9 +1337,17 @@ def isolated_environment(
     """Scrub direct index pointers and mark an inherited model sandbox."""
 
     out = {str(key): str(value) for key, value in env.items()}
-    blocked_prefixes = ("GH_", "GITHUB_", "AWS_", "AZURE_", "GOOGLE_", "SSH_", "NPM_", "DOCKER_", "KUBECONFIG", "GIT_CONFIG_", "CURL_", "XDG_")
+    blocked_prefixes = (
+        "GH_", "GITHUB_", "AWS_", "AZURE_", "GOOGLE_", "SSH_", "NPM_",
+        "DOCKER_", "KUBECONFIG", "GIT_CONFIG_", "CURL_", "XDG_",
+        "OPENAI_", "ANTHROPIC_", "CODEX_", "HERMES_CODEX_", "HONCHO_", "REDIS_", "PG",
+    )
     for key in list(out):
-        if key.startswith(blocked_prefixes) or key in {"GIT_ASKPASS", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"}:
+        if key.startswith(blocked_prefixes) or key in {
+            "ALL_PROXY", "DATABASE_URL", "GIT_ASKPASS", "GIT_SSH",
+            "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM",
+            "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+        }:
             out.pop(key, None)
     out.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"})
     out.pop("MNEMOSYNE_DATA_DIR", None)
@@ -1302,18 +1510,16 @@ def main(argv: list[str] | None = None) -> int:
     env = dict(os.environ)
     try:
         if _uses_openai_codex(env):
-            from john_lomein_auth_projection import sync_projection
+            from john_lomein_auth_projection import scrub_model_credentials
 
             home = _runtime_home(env)
-            authority = _auth_authority_home(env, required=True)
-            assert authority is not None
-            sync_projection(
+            _auth_authority_home(env, required=True)
+            scrub_model_credentials(
                 home,
                 profiles=[
                     home / "profiles" / profile
                     for profile in CANONICAL_ROLE_PROFILES.values()
                 ],
-                authority_home=authority,
                 provider=OPENAI_CODEX_PROVIDER,
             )
         is_public_guide = args.profile == "john-lomein-guide"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
 import os
 import sys
@@ -32,6 +33,11 @@ from broker.john_lomein_broker_store import (
 
 
 SCRIPT = ROOT / "scripts" / "john_lomein_protected_actions.py"
+
+
+def short_socket_path(root: Path) -> Path:
+    digest = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
+    return Path(tempfile.gettempdir()).resolve() / f"jlb-{digest}.sock"
 spec = importlib.util.spec_from_file_location(
     "protected_actions_for_service_test", SCRIPT
 )
@@ -114,7 +120,7 @@ def config(root: Path) -> dict[str, Any]:
         "transport": {
             "kind": TRANSPORT_KIND,
             "peer_credentials": PEER_CREDENTIAL_PROTOCOL,
-            "socket_path": str(root / "broker.sock"),
+            "socket_path": str(short_socket_path(root)),
             "requester_uid": uid + 1,
             "submit_gid": os.getgid(),
             "max_request_bytes": 262144,

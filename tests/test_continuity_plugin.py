@@ -270,7 +270,7 @@ class ContinuityPluginTest(unittest.TestCase):
             with mock.patch.dict(
                 os.environ,
                 {"HERMES_HOME": str(runtime)},
-                clear=False,
+                clear=True,
             ):
                 resolved = plugin._default_profile_resolver("desktop-session")
 

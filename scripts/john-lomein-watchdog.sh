@@ -6,9 +6,8 @@ ENV_FILE="$SCRIPT_DIR/john-lomein-instance.env"
 . "$ENV_FILE"
 . "$BOT_HERMES_HOME/scripts/john-lomein-auth-env.sh"
 if [ "${BOT_MODEL_PROVIDER:-}" = "openai-codex" ] || [ "${BOT_FALLBACK_PROVIDER:-}" = "openai-codex" ]; then
-  "$HERMES_PYTHON" "$BOT_HERMES_HOME/scripts/john_lomein_auth_projection.py" sync \
+  "$HERMES_PYTHON" "$BOT_HERMES_HOME/scripts/john_lomein_auth_projection.py" scrub \
     --runtime-home "$BOT_HERMES_HOME" \
-    --authority-home "$JOHN_LOMEIN_AUTH_AUTHORITY_HOME" \
     --provider openai-codex \
     --profile "$BOT_HERMES_HOME/profiles/$BOT_MAINTAINER_PROFILE" \
     --profile "$BOT_HERMES_HOME/profiles/$BOT_FORGE_PROFILE" \

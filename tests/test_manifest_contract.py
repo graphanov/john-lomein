@@ -1160,6 +1160,18 @@ class ManifestContractTest(unittest.TestCase):
                 if role == "guide":
                     self.assertIn("john-lomein-guide-lifecycle", initial_enabled_plugins)
                     self.assertNotIn("john-lomein-guide-lifecycle", initial_disabled_plugins)
+                    lifecycle_binding = (
+                        profile_dir / "plugins" / "john-lomein-guide-lifecycle"
+                    )
+                    self.assertTrue(lifecycle_binding.is_symlink())
+                    self.assertEqual(
+                        lifecycle_binding.resolve(),
+                        (
+                            runtime
+                            / "plugins"
+                            / "john-lomein-guide-lifecycle"
+                        ).resolve(),
+                    )
                 else:
                     self.assertNotIn("john-lomein-guide-lifecycle", initial_enabled_plugins)
                     self.assertIn("john-lomein-guide-lifecycle", initial_disabled_plugins)

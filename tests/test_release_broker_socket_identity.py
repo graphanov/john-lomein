@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import socket
 import struct
@@ -16,6 +17,11 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+
+def short_socket_path(root: Path) -> Path:
+    digest = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
+    return Path(tempfile.gettempdir()).resolve() / f"jlrs-{digest}.sock"
 
 from release_broker.john_lomein_release_broker_daemon import (
     PeerCredentials,
@@ -296,7 +302,7 @@ class ReleaseBrokerSocketIdentityTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
             root.chmod(0o700)
-            path = root / "release.sock"
+            path = short_socket_path(root)
             config: dict[str, Any] = {
                 "broker_uid": os.getuid(),
                 "transport": {
@@ -326,7 +332,7 @@ class ReleaseBrokerSocketIdentityTest(unittest.TestCase):
                 "broker_uid": os.getuid(),
                 "broker_private_gid": os.getgid() + 1,
                 "transport": {
-                    "socket_path": str(root / "release.sock"),
+                    "socket_path": str(short_socket_path(root)),
                     "submit_gid": os.getgid(),
                 },
             }

@@ -199,6 +199,7 @@ class GuideLifecyclePluginTest(unittest.TestCase):
         self.assertIn("lifecycle_plugin='john-lomein-guide-lifecycle'", deploy)
         self.assertIn("x != lifecycle_plugin]+[lifecycle_plugin]", deploy)
         self.assertIn("x for x in disabled_plugins if x != lifecycle_plugin", deploy)
+        self.assertIn("lifecycle_plugin_link.symlink_to(", deploy)
 
     def test_plugin_declares_and_registers_pre_and_output_hooks(self):
         plugin = load_plugin()
@@ -368,12 +369,29 @@ class GuideLifecyclePluginTest(unittest.TestCase):
         deploy = (ROOT / "scripts" / "deploy-instance.sh").read_text(encoding="utf-8")
         self.assertIn("john_lomein_guide_lifecycle.py", deploy)
         self.assertIn("john-lomein-guide-lifecycle", deploy)
+        self.assertIn("lifecycle_plugin_link=pdir/'plugins'/'john-lomein-guide-lifecycle'", deploy)
+        self.assertIn(
+            "lifecycle_plugin_link.symlink_to(",
+            deploy,
+        )
         self.assertIn(
             "home / \"plugins\" / \"john-lomein-guide-lifecycle\"",
             (ROOT / "scripts" / "john_lomein_manifest_contract.py").read_text(
                 encoding="utf-8"
             ),
         )
+
+    def test_gateway_verifies_discovery_hooks_workspace_and_tombstone_gate_before_launch(self):
+        installer = (ROOT / "scripts" / "install-guide-gateway.sh").read_text(
+            encoding="utf-8"
+        )
+        preflight = "john_lomein_guide_runtime_preflight.py"
+        self.assertIn(preflight, installer)
+        preflight_position = installer.index(preflight)
+        self.assertLess(preflight_position, installer.index("launchctl bootstrap"))
+        self.assertIn("--expected-workspace", installer)
+        self.assertIn("startup-gate", installer)
+        self.assertLess(installer.index("startup-gate"), installer.index("launchctl bootstrap"))
 
 
 if __name__ == "__main__":

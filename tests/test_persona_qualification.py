@@ -27,6 +27,7 @@ from qualification_attestor import (  # noqa: E402
 
 RUNNER = ROOT / "scripts" / "john-lomein-persona-qualification.py"
 COMMAND_SCHEMA = "john-lomein.persona-qualification-command.v1"
+FIXTURE_PYTHON = Path("/usr/bin/python3").resolve(strict=True)
 
 
 def canonical_json(value):
@@ -332,7 +333,7 @@ class PersonaQualificationTests(unittest.TestCase):
                 "kind": "candidate",
                 "id": "candidate-adapter",
                 "route_id": "candidate-route",
-                "argv": [str(Path(sys.executable).resolve()), str(self.candidate_stub)],
+                "argv": [str(FIXTURE_PYTHON), str(self.candidate_stub)],
                 "credential_env": [],
                 "models": models,
             },
@@ -344,7 +345,7 @@ class PersonaQualificationTests(unittest.TestCase):
                 "kind": "judge",
                 "id": "judge-adapter",
                 "route_id": "judge-route",
-                "argv": [str(Path(sys.executable).resolve()), str(self.judge_stub)],
+                "argv": [str(FIXTURE_PYTHON), str(self.judge_stub)],
                 "credential_env": [],
                 "model": {
                     "provider": "judge-provider",
@@ -589,7 +590,8 @@ class PersonaQualificationTests(unittest.TestCase):
         private_files = [
             path
             for path in snapshot_root.rglob("*")
-            if path.is_file() and "/private/" in str(path)
+            if path.is_file()
+            and "private" in path.relative_to(snapshot_root).parts
         ]
         self.assertTrue(private_files)
         target = private_files[0]

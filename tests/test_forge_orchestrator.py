@@ -2073,6 +2073,14 @@ class ForgeIssueSyncTest(unittest.TestCase):
         self.assertIn("Operation not permitted", keychain_find_error)
 
     @unittest.skipUnless(sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").is_file(), "macOS sandbox required")
+    def test_verifier_git_uses_portable_system_launcher(self):
+        forge = load_forge()
+        expected = Path("/Library/Developer/CommandLineTools/usr/bin/git")
+        if not expected.is_file():
+            expected = Path("/Applications/Xcode.app/Contents/Developer/usr/bin/git")
+        self.assertEqual(forge.trusted_verifier_git(), expected)
+
+    @unittest.skipUnless(sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").is_file(), "macOS sandbox required")
     def test_real_registered_worktree_passes_sandboxed_verifier_commands(self):
         forge = load_forge()
         branch = "forge/issue-15-sandbox"

@@ -292,8 +292,9 @@ validate_existing_path() {
   case "$final_kind" in
     file) [ -f "$path" ] || die "$label must be a regular file" ;;
     executable)
-      [ -f "$path" ] && [ -x "$path" ] ||
+      if [ ! -f "$path" ] || [ ! -x "$path" ]; then
         die "$label must be an executable regular file"
+      fi
       ;;
     directory) [ -d "$path" ] || die "$label must be a directory" ;;
     any) ;;
@@ -614,8 +615,9 @@ for kind, value in paths:
 
 seen_executable=0
 while IFS=$'\t' read -r path_kind runtime_path; do
-  [ -n "$path_kind" ] && [ -n "$runtime_path" ] ||
+  if [ -z "$path_kind" ] || [ -z "$runtime_path" ]; then
     die "Python runtime path report is malformed"
+  fi
   if [ "$path_kind" = "executable" ]; then
     [ "$runtime_path" = "$PYTHON" ] ||
       die "Python sys.executable does not equal the supplied interpreter path"
@@ -637,8 +639,9 @@ for kind, value in sorted(sysconfig.get_paths().items()):
 ' >"$SYSCONFIG_REPORT"
 
 while IFS=$'\t' read -r path_kind runtime_path; do
-  [ -n "$path_kind" ] && [ -n "$runtime_path" ] ||
+  if [ -z "$path_kind" ] || [ -z "$runtime_path" ]; then
     die "Python sysconfig path report is malformed"
+  fi
   validate_runtime_path "$runtime_path" "Python sysconfig $path_kind"
 done <"$SYSCONFIG_REPORT"
 
@@ -688,14 +691,16 @@ for kind, value in sorted(reported):
 seen_crypto_package=0
 seen_crypto_native=0
 while IFS=$'\t' read -r path_kind runtime_path; do
-  [ -n "$path_kind" ] && [ -n "$runtime_path" ] ||
+  if [ -z "$path_kind" ] || [ -z "$runtime_path" ]; then
     die "cryptography path report is malformed"
+  fi
   [ "$path_kind" != "cryptography_package" ] || seen_crypto_package=1
   [ "$path_kind" != "cryptography_native_binding" ] || seen_crypto_native=1
   validate_runtime_path "$runtime_path" "$path_kind"
 done <"$CRYPTOGRAPHY_REPORT"
-[ "$seen_crypto_package" -eq 1 ] && [ "$seen_crypto_native" -eq 1 ] ||
+if [ "$seen_crypto_package" -ne 1 ] || [ "$seen_crypto_native" -ne 1 ]; then
   die "cryptography package/native binding trust could not be established"
+fi
 
 snapshot_input() {
   local source="$1"
@@ -1241,8 +1246,9 @@ REQUIRED_MODULES=(
 )
 for module_name in "${REQUIRED_MODULES[@]}"; do
   source_file="$SOURCE_BROKER_DIR/$module_name"
-  [ -f "$source_file" ] && [ ! -L "$source_file" ] ||
+  if [ ! -f "$source_file" ] || [ -L "$source_file" ]; then
     die "required release broker module is missing or unsafe: $module_name"
+  fi
 done
 
 CODE_STAGE="$(
@@ -1326,8 +1332,9 @@ assert_installed_file_metadata() {
   local expected_gid="$3"
   local expected_mode="$4"
   local label="$5"
-  [ -f "$path" ] && [ ! -L "$path" ] ||
+  if [ ! -f "$path" ] || [ -L "$path" ]; then
     die "$label is not a regular non-symlink file"
+  fi
   [ "$(/usr/bin/stat -f '%u' "$path")" -eq "$expected_uid" ] ||
     die "$label owner is incorrect"
   [ "$(/usr/bin/stat -f '%g' "$path")" -eq "$expected_gid" ] ||

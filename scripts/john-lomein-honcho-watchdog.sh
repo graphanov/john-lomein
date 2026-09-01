@@ -11,5 +11,6 @@ exec "$PY" "$BOT_HERMES_HOME/scripts/john-lomein-honcho-watchdog.py" \
   --workspace "$BOT_HONCHO_WORKSPACE" --runtime-home "$BOT_HERMES_HOME" \
   --manifest "$BOT_INSTANCE_MANIFEST" --guide-profile "$BOT_GUIDE_PROFILE" \
   --guide-label "ai.hermes.gateway-john-lomein-$BOT_SLUG-guide" \
+  --supervisor-label "$BOT_HONCHO_SUPERVISOR_LABEL" \
   --server-root "$BOT_HONCHO_SERVER_ROOT" --expected-memory-model "$BOT_HONCHO_EXPECTED_MEMORY_MODEL" \
   --snapshot "$BOT_HERMES_HOME/state/honcho/watchdog-latest.json"

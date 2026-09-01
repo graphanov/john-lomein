@@ -174,12 +174,20 @@ A profile has its own:
 - skills;
 - configuration;
 - sessions;
-- auth projection;
+- credential-free provider binding;
 - logs;
 - state;
 - Honcho identity.
 
-Profiles do not all receive the same tools. Guide is deliberately weaker than Forge and Maintainer. Credentials are projected only where a role needs them.
+Profiles do not all receive the same tools. Guide is deliberately weaker than Forge and Maintainer.
+
+Model roles do not receive provider credentials. A controller-owned broker
+keeps the real OAuth material outside the model sandbox, accepts only the
+small Codex HTTP surface Hermes needs over a per-process Unix socket, and owns
+the fixed upstream host. A second controller-owned socket restores local
+Honcho without reopening loopback: it is pinned to the configured workspace
+and permits message writes only when that profile's `saveMessages` policy does.
+Direct loopback, PostgreSQL, Redis, and Internet connections remain denied.
 
 The operating-system sandbox makes identity files, security configuration, memory configuration, scripts, plugins, and credential surfaces read-only inside model processes.
 

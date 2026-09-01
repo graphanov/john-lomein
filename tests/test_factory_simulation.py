@@ -40,6 +40,17 @@ def file_snapshot(root: Path) -> dict[str, str]:
 
 
 class FactorySimulationTest(unittest.TestCase):
+    @unittest.skipUnless(
+        sys.platform == "darwin" and Path("/usr/bin/git").is_file(),
+        "macOS system Git launcher required",
+    )
+    def test_trusted_git_prefers_portable_system_launcher(self):
+        simulator = load_simulator()
+        expected = Path("/Library/Developer/CommandLineTools/usr/bin/git")
+        if not expected.is_file():
+            expected = Path("/Applications/Xcode.app/Contents/Developer/usr/bin/git")
+        self.assertEqual(simulator._trusted_git(), expected)
+
     def make_repo(self, base: Path) -> Path:
         repo = base / "repo"
         for folder in ("active", "backlog", "blocked", "done"):

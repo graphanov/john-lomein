@@ -20,7 +20,9 @@ SLUG=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --slug)
-      [ "$#" -ge 2 ] && [ -n "$2" ] || usage
+      if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+        usage
+      fi
       [ -z "$SLUG" ] || die "--slug was provided more than once"
       SLUG="$2"
       shift 2
@@ -61,8 +63,9 @@ SCRIPT_DIRECTORY="$(
   cd -P "$(/usr/bin/dirname "$SCRIPT_SOURCE")" && pwd -P
 )"
 SCRIPT_PATH="$SCRIPT_DIRECTORY/$(/usr/bin/basename "$SCRIPT_SOURCE")"
-[ -f "$SCRIPT_PATH" ] && [ ! -L "$SCRIPT_PATH" ] ||
+if [ ! -f "$SCRIPT_PATH" ] || [ -L "$SCRIPT_PATH" ]; then
   die "uninstaller must be a regular non-symlink file"
+fi
 [ "$(/usr/bin/stat -f '%u' "$SCRIPT_PATH")" -eq 0 ] ||
   die "uninstaller must be staged as a root-owned operator asset"
 SCRIPT_MODE="$(/usr/bin/stat -f '%Lp' "$SCRIPT_PATH")"

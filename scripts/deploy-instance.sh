@@ -112,14 +112,13 @@ from john_lomein_manifest_contract import (
     validate_manifest_contract,
 )
 from john_lomein_profile_contract import canonical_role_profiles
-from john_lomein_honcho_contract import honcho_settings, probe_honcho_health
+from john_lomein_honcho_contract import honcho_settings
 
 try:
     manifest=yaml.safe_load(Path(sys.argv[2]).read_text(encoding='utf-8')) or {}
     validate_manifest_contract(manifest)
     slug=str((manifest.get('instance') or {}).get('slug') or '').strip()
     settings=honcho_settings(manifest,instance_slug=slug)
-    probe_honcho_health(settings['base_url'],timeout=min(5.0,float(settings['timeout'])))
     validate_deploy_managed_paths(
         Path(sys.argv[3]),
         canonical_role_profiles(manifest),
@@ -218,9 +217,9 @@ if source is not None:
     destination.symlink_to(source, target_is_directory=source.is_dir())
 PY
 
-# OAuth refresh grants are deliberately not copied into an instance. The
-# trusted projection broker runs after profiles and sealed scripts exist, and
-# writes access-token-only views for model processes.
+# OAuth material is never copied into a model-visible provider path. After
+# profiles and sealed scripts exist, deployment removes historical Codex
+# projections; the launch-time controller broker owns provider credentials.
 
 render_and_configure() {
   "${PRODUCT_PYTHON[@]}" - "$PRODUCT_ROOT" "$JL_INSTANCE_MANIFEST_INPUT" "$BOT_HERMES_HOME" <<'PY'
@@ -516,7 +515,7 @@ script_lines=[
  f'BOT_OWNER_GITHUB_LOGINS={sq(",".join(owner_github_logins))}', f'BOT_OWNER_OVERRIDE_ENABLED={sq("1" if owner_override["enabled"] else "0")}', f'BOT_OWNER_OVERRIDE_KEY_ID={sq(owner_override["key_id"])}', f'BOT_OWNER_OVERRIDE_PUBLIC_KEY_SHA256={sq(owner_override["public_key_sha256"])}', f'BOT_OWNER_OVERRIDE_DISCORD_USER_IDS={sq(",".join(owner_override["allowed_discord_user_ids"]))}',
  f'BOT_REVIEW_QUORUM_POLICY_JSON={sq(json.dumps(review_quorum, sort_keys=True, separators=(",",":")))}',
  f'BOT_REVIEW_ONLY_PROFILES_QUALIFIED={sq("1" if contract["flags"]["review_only_profiles_qualified"] else "0")}',
- f'BOT_HONCHO_BASE_URL={sq(honcho_runtime["base_url"])}', f'BOT_HONCHO_WORKSPACE={sq(honcho_runtime["workspace"])}', f'BOT_HONCHO_DATABASE={sq(honcho_runtime["database"])}', f'BOT_HONCHO_WATCHDOG_ENABLED={sq("1" if honcho_runtime["watchdog_enabled"] else "0")}', f'BOT_HONCHO_SERVER_ROOT={sq(honcho_runtime["server_root"])}', f'BOT_HONCHO_EXPECTED_MEMORY_MODEL={sq(honcho_runtime["expected_memory_model"])}', f'BOT_INSTANCE_MANIFEST={sq(str(manifest))}',
+ f'BOT_HONCHO_BASE_URL={sq(honcho_runtime["base_url"])}', f'BOT_HONCHO_REDIS_URL={sq(honcho_runtime["redis_url"])}', f'BOT_HONCHO_WORKSPACE={sq(honcho_runtime["workspace"])}', f'BOT_HONCHO_DATABASE={sq(honcho_runtime["database"])}', f'BOT_HONCHO_WATCHDOG_ENABLED={sq("1" if honcho_runtime["watchdog_enabled"] else "0")}', f'BOT_HONCHO_SERVER_ROOT={sq(honcho_runtime["server_root"])}', f'BOT_HONCHO_CHECKOUT_COMMIT={sq(honcho_runtime["checkout_commit"])}', f'BOT_HONCHO_SUPERVISOR_LABEL={sq(honcho_runtime["supervisor_label"])}', f'BOT_HONCHO_EXPECTED_MEMORY_MODEL={sq(honcho_runtime["expected_memory_model"])}', f'BOT_INSTANCE_MANIFEST={sq(str(H/"instance.yaml"))}',
  f'BOT_AUTONOMY_POLICY_JSON={sq(json.dumps(autonomy_policy, sort_keys=True, separators=(",",":")))}',
  f'BOT_MISSION_OWNER_AUTHORED_DECLARED={sq("1" if flags["mission_owner_authored"] else "0")}', f'BOT_MISSION_OWNER_AUTHORED={sq("1" if posture["mission_complete"] else "0")}', f'BOT_MISSION_STATEMENT={sq(mission_statement)}', f'BOT_MISSION_ROADMAP_SOURCES_JSON={sq(json.dumps(mission_roadmap_sources, ensure_ascii=False))}', f'BOT_MISSION_OWNER_SIGNAL_POLICY={sq(mission_owner_signal_policy)}', f'BOT_MISSION_PERSONALITY_VOICE={sq(mission_personality_voice)}', f'BOT_MISSION_PERSONALITY_CREATIVE_POSTURE={sq(mission_personality_creative_posture)}', f'BOT_NPM_TAG={sq(npm_tag)}', f'BOT_PUBLISH_WORKFLOW={sq(publish_workflow)}',
  f'BOT_OMH_ENABLED={sq("1" if omh_enabled else "0")}', f'BOT_OMH_REQUIRED={sq("1" if omh_required else "0")}', f'BOT_OMH_HOME={sq(str(omh_home))}', f'BOT_OMH_SKILLS_SOURCE={sq(str(omh_skill_source))}',
@@ -599,6 +598,11 @@ for role, profile in role_profiles.items():
     if role == 'guide':
         approval_plugin_link.symlink_to(
             H/'plugins'/'john-lomein-release-approval',
+            target_is_directory=True,
+        )
+        lifecycle_plugin_link=pdir/'plugins'/'john-lomein-guide-lifecycle'
+        lifecycle_plugin_link.symlink_to(
+            H/'plugins'/'john-lomein-guide-lifecycle',
             target_is_directory=True,
         )
     atomic_text(pdir/'.no-bundled-skills', 'john-lomein product runtime: bundled skills intentionally disabled; profile-local skills only.\n', 0o600)
@@ -815,7 +819,89 @@ atomic_text(H/'state'/'john-lomein-native-workflows.json', json.dumps({
     },
 }, indent=2, sort_keys=True), 0o600)
 # copy scripts
-script_names=['john_lomein_auth_projection.py', 'john_lomein_autonomy.py', 'john_lomein_collaboration_contract.py', 'john_lomein_comment_templates.py', 'john_lomein_container_verifier.py', 'john_lomein_continuity.py', 'john_lomein_continuity_importer.py', 'john_lomein_continuity_protocol.py', 'john_lomein_factory_receipts.py', 'john_lomein_file_contract.py', 'john_lomein_gateway_lock_contract.py', 'john_lomein_guide_lifecycle.py', 'john_lomein_proposal.py', 'john_lomein_manifest_contract.py', 'john_lomein_honcho_contract.py', 'john_lomein_honcho_pilot.py', 'john_lomein_memory_boundary_migration.py', 'john_lomein_memory_contract.py', 'john_lomein_model_isolation.py', 'john_lomein_owner_actions.py', 'john_lomein_plugin_contract.py', 'john_lomein_profile_contract.py', 'john_lomein_protected_actions.py', 'john_lomein_public_safety.py', 'john_lomein_release_packets.py', 'john_lomein_scoped_publication.py', 'john_lomein_service_registry.py', 'john-lomein-continuity-hook-canary.py', 'john-lomein-factory-simulate.py', 'john-lomein-trust-assertion.py', 'john-lomein-auth-env.sh', 'john-lomein-diagnostic-tick.sh', 'john-lomein-watchdog.sh', 'john-lomein-maintainer-trigger.sh', 'john-lomein-maintainer-prompt.txt', 'john-lomein-worker.py', 'john-lomein-gh-guard.py', 'john-lomein-git-guard.py', 'john-lomein-protected-submit.py', 'john-lomein-issue-intake.py', 'john-lomein-issue-triage.py', 'john-lomein-osc-portfolio-steward.py', 'john-lomein-osc-portfolio-trigger.sh', 'john-lomein-release-approve.py', 'john-lomein-release-bundler.py', 'john-lomein-release-executor.py', 'john-lomein-release-submit.py', 'john-lomein-forge-trigger.sh', 'john-lomein-forge-orchestrator.py', 'john-lomein-omh-implementation.py', 'john-lomein-queue-health.py', 'john-lomein-cross-instance-learning-digest.py', 'john-lomein-learning-steward.py', 'john-lomein-learning-trigger.sh', 'john-lomein-overwatch-trigger.sh', 'john-lomein-overwatch-scan.py', 'john-lomein-overwatch-post.sh', 'john-lomein-overwatch-prompt.txt', 'john-lomein-keepawake.sh', 'install-runtime-supervisor.sh', 'uninstall-runtime-supervisor.sh', 'repair-profile-gh-auth.py', 'stage_profile_distribution.py', 'read-instance-env.py', 'apply-guide-discord-config.py', 'install-guide-gateway.sh', 'john_lomein_owner_override.py', 'john_lomein_review_quorum.py', 'honcho-embedding-recovery-candidates.sql', 'honcho-participant-candidates.sql', 'honcho-participant-delete.sql', 'john-lomein-honcho-watchdog.py', 'john-lomein-honcho-watchdog.sh', 'john-lomein-exact-head-review.py']
+script_names=[
+    'john_lomein_auth_projection.py',
+    'john_lomein_autonomy.py',
+    'john_lomein_collaboration_contract.py',
+    'john_lomein_comment_templates.py',
+    'john_lomein_container_verifier.py',
+    'john_lomein_continuity.py',
+    'john_lomein_continuity_importer.py',
+    'john_lomein_continuity_protocol.py',
+    'john_lomein_factory_receipts.py',
+    'john_lomein_file_contract.py',
+    'john_lomein_gateway_lock_contract.py',
+    'john_lomein_guide_lifecycle.py',
+    'john_lomein_guide_runtime_preflight.py',
+    'john_lomein_proposal.py',
+    'john_lomein_manifest_contract.py',
+    'john_lomein_honcho_contract.py',
+    'john_lomein_honcho_pilot.py',
+    'john_lomein_honcho_broker.py',
+    'john_lomein_public_honcho_service.py',
+    'john_lomein_memory_boundary_migration.py',
+    'john_lomein_memory_contract.py',
+    'john_lomein_model_isolation.py',
+    'john_lomein_provider_broker.py',
+    'john_lomein_provider_bootstrap.py',
+    'john_lomein_owner_actions.py',
+    'john_lomein_plugin_contract.py',
+    'john_lomein_profile_contract.py',
+    'john_lomein_protected_actions.py',
+    'john_lomein_public_safety.py',
+    'john_lomein_release_packets.py',
+    'john_lomein_scoped_publication.py',
+    'john_lomein_service_registry.py',
+    'john-lomein-continuity-hook-canary.py',
+    'john-lomein-factory-simulate.py',
+    'john-lomein-trust-assertion.py',
+    'john-lomein-auth-env.sh',
+    'john-lomein-diagnostic-tick.sh',
+    'john-lomein-watchdog.sh',
+    'john-lomein-maintainer-trigger.sh',
+    'john-lomein-maintainer-prompt.txt',
+    'john-lomein-worker.py',
+    'john-lomein-gh-guard.py',
+    'john-lomein-git-guard.py',
+    'john-lomein-protected-submit.py',
+    'john-lomein-issue-intake.py',
+    'john-lomein-issue-triage.py',
+    'john-lomein-osc-portfolio-steward.py',
+    'john-lomein-osc-portfolio-trigger.sh',
+    'john-lomein-release-approve.py',
+    'john-lomein-release-bundler.py',
+    'john-lomein-release-executor.py',
+    'john-lomein-release-submit.py',
+    'john-lomein-forge-trigger.sh',
+    'john-lomein-forge-orchestrator.py',
+    'john-lomein-omh-implementation.py',
+    'john-lomein-queue-health.py',
+    'john-lomein-cross-instance-learning-digest.py',
+    'john-lomein-learning-steward.py',
+    'john-lomein-learning-trigger.sh',
+    'john-lomein-overwatch-trigger.sh',
+    'john-lomein-overwatch-scan.py',
+    'john-lomein-overwatch-post.sh',
+    'john-lomein-overwatch-prompt.txt',
+    'john-lomein-keepawake.sh',
+    'install-runtime-supervisor.sh',
+    'uninstall-runtime-supervisor.sh',
+    'repair-profile-gh-auth.py',
+    'stage_profile_distribution.py',
+    'read-instance-env.py',
+    'apply-guide-discord-config.py',
+    'install-guide-gateway.sh',
+    'john_lomein_owner_override.py',
+    'john_lomein_review_quorum.py',
+    'honcho-embedding-recovery-candidates.sql',
+    'honcho-participant-candidates.sql',
+    'honcho-participant-delete.sql',
+    'honcho-retention-candidates.sql',
+    'honcho-retention-delete.sql',
+    'john-lomein-honcho-watchdog.py',
+    'john-lomein-honcho-watchdog.sh',
+    'john-lomein-exact-head-review.py',
+]
 if not omh_enabled:
     script_names=[name for name in script_names if name != 'john-lomein-omh-implementation.py']
 allowed_script_entries={
@@ -977,13 +1063,18 @@ for profile in "$BOT_MAINTAINER_PROFILE" "$BOT_FORGE_PROFILE" "$BOT_GUIDE_PROFIL
     exit 2
   fi
 done
-# Use the freshly generated instance env for deploy-time credential projection,
+# Use the freshly generated instance env for deploy-time credential scrubbing,
 # cron/profile setup, and lane-specific knobs not exposed at bootstrap.
 . "$BOT_HERMES_HOME/scripts/john-lomein-instance.env"
+if [ "${BOT_GUIDE_GATEWAY_ENABLED:-0}" = "1" ]; then
+  "${PRODUCT_PYTHON[@]}" \
+    "$BOT_HERMES_HOME/scripts/john_lomein_public_honcho_service.py" \
+    public-service-install \
+    --manifest "$BOT_HERMES_HOME/instance.yaml" >/dev/null
+fi
 if [ "${BOT_MODEL_PROVIDER:-}" = "openai-codex" ] || [ "${BOT_FALLBACK_PROVIDER:-}" = "openai-codex" ]; then
-  "$HERMES_PYTHON" "$BOT_HERMES_HOME/scripts/john_lomein_auth_projection.py" sync \
+  "$HERMES_PYTHON" "$BOT_HERMES_HOME/scripts/john_lomein_auth_projection.py" scrub \
     --runtime-home "$BOT_HERMES_HOME" \
-    --authority-home "$JOHN_LOMEIN_AUTH_AUTHORITY_HOME" \
     --provider openai-codex \
     --profile "$BOT_HERMES_HOME/profiles/$BOT_MAINTAINER_PROFILE" \
     --profile "$BOT_HERMES_HOME/profiles/$BOT_FORGE_PROFILE" \
@@ -1378,6 +1469,37 @@ for role, profile in canonical_role_profiles(bot).items():
         raise SystemExit(f"invalid profile config before boundary reassertion: {path}")
     apply_agent_memory_boundary(config, role)
     apply_product_plugin_boundary(config, role, omh_enabled=omh_enabled)
+    product_plugins={
+        'john-lomein-continuity',
+        *(
+            {
+                'john-lomein-release-approval',
+                'john-lomein-guide-lifecycle',
+            }
+            if role=='guide'
+            else set()
+        ),
+    }
+    bindings=home/'profiles'/profile/'plugins'
+    if bindings.is_symlink() or not bindings.is_dir():
+        raise SystemExit(f'unsafe profile plugin binding root: {bindings}')
+    for plugin_name in (
+        'john-lomein-continuity',
+        'john-lomein-release-approval',
+        'john-lomein-guide-lifecycle',
+    ):
+        binding=bindings/plugin_name
+        expected=home/'plugins'/plugin_name
+        if plugin_name in product_plugins:
+            if binding.exists() or binding.is_symlink():
+                if not binding.is_symlink() or binding.resolve()!=expected.resolve():
+                    raise SystemExit(f'unsafe profile plugin binding: {binding}')
+            else:
+                binding.symlink_to(expected,target_is_directory=True)
+        elif binding.exists() or binding.is_symlink():
+            if binding.is_dir() and not binding.is_symlink():
+                raise SystemExit(f'unsafe non-Guide product plugin directory: {binding}')
+            binding.unlink()
     config.setdefault("agent", {})["bot_mode_protocol"] = collaboration[
         "bot_chat_protocol_enabled"
     ]
@@ -1465,7 +1587,6 @@ fi
 if [ "${BOT_HONCHO_WATCHDOG_ENABLED:-0}" = "1" ] && [ "${BOT_GUIDE_GATEWAY_ENABLED:-0}" = "1" ]; then
   create_product_cron "every 5m" john-lomein-honcho-watchdog.sh "john-lomein-$BOT_SLUG-honcho-watchdog"
 fi
-
 # External Hermes/OMH administrative commands can initialize their historical
 # default path even though agent memory is disabled. Sweep again after every
 # such command and preserve any residue in the model-hidden quarantine.

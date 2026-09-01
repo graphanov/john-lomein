@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import plistlib
 import stat
 import sys
 import tempfile
@@ -31,7 +32,7 @@ class HonchoPilotTest(unittest.TestCase):
                 "embedding_pending": 4,
                 "embedding_oldest_pending_seconds": 15000,
                 "embedding_recent_failed": 0,
-                "database_size_bytes": 18 * 1024 * 1024,
+                "workspace_storage_bytes": 18 * 1024 * 1024,
             },
             {
                 "queue_pending_max": 25,
@@ -39,7 +40,7 @@ class HonchoPilotTest(unittest.TestCase):
                 "embedding_pending_max": 10,
                 "embedding_oldest_seconds_max": 900,
                 "embedding_recent_failed_max": 0,
-                "database_size_bytes_max": 1024 * 1024 * 1024,
+                "workspace_storage_bytes_max": 1024 * 1024 * 1024,
             },
         )
         self.assertFalse(result["healthy"])
@@ -60,7 +61,7 @@ class HonchoPilotTest(unittest.TestCase):
                 "embedding_pending": 0,
                 "embedding_oldest_pending_seconds": 0,
                 "embedding_recent_failed": 0,
-                "database_size_bytes": 1,
+                "workspace_storage_bytes": 1,
             },
             {
                 "queue_pending_max": 0,
@@ -68,12 +69,12 @@ class HonchoPilotTest(unittest.TestCase):
                 "embedding_pending_max": 0,
                 "embedding_oldest_seconds_max": 1,
                 "embedding_recent_failed_max": 0,
-                "database_size_bytes_max": 2,
+                "workspace_storage_bytes_max": 2,
             },
         )
         self.assertEqual(result, {"healthy": True, "reasons": []})
 
-    def test_collect_metrics_scopes_embedding_backlog_to_selected_workspace(self):
+    def test_collect_metrics_scopes_every_mutable_work_signal_to_selected_workspace(self):
         import john_lomein_honcho_pilot as pilot
 
         captured = {}
@@ -104,9 +105,24 @@ class HonchoPilotTest(unittest.TestCase):
             "FROM message_embeddings WHERE workspace_name=:'workspace' AND sync_state='failed'",
             sql,
         )
+        self.assertIn(
+            "FROM queue WHERE workspace_name=:'workspace' AND processed=false",
+            sql,
+        )
+        self.assertIn(
+            "FROM queue WHERE workspace_name=:'workspace' AND COALESCE(error,'')<>''",
+            sql,
+        )
+        self.assertNotIn("FROM queue WHERE processed=false", sql)
+        self.assertNotIn("pg_database_size", sql)
+        self.assertIn("'workspace_storage_bytes'", sql)
 
     def test_retention_plan_digest_is_stable_and_tamper_evident(self):
-        from john_lomein_honcho_pilot import make_retention_plan, validate_retention_plan
+        from john_lomein_honcho_pilot import (
+            RETENTION_CANDIDATE_KEYS,
+            make_retention_plan,
+            validate_retention_plan,
+        )
 
         values = {
             "database_oid": 123,
@@ -119,10 +135,35 @@ class HonchoPilotTest(unittest.TestCase):
             "document_count": 6,
             "schema_fingerprint": "a" * 64,
         }
-        first = make_retention_plan(values)
-        second = make_retention_plan(dict(reversed(list(values.items()))))
+        candidate_sets = {key: [] for key in RETENTION_CANDIDATE_KEYS}
+        candidate_sets.update(
+            {
+                "message_ids": [11, 12],
+                "message_public_ids": ["m11", "m12"],
+                "embedding_ids": [21, 22],
+                "document_ids": ["d31"],
+                "queue_ids": [41],
+                "work_unit_keys": ["w1"],
+            }
+        )
+        values.update(
+            {
+                "message_count": 2,
+                "queue_count": 1,
+                "embedding_count": 2,
+                "document_count": 1,
+            }
+        )
+        first = make_retention_plan(values, candidate_sets=candidate_sets)
+        second = make_retention_plan(
+            dict(reversed(list(values.items()))),
+            candidate_sets=dict(reversed(list(candidate_sets.items()))),
+        )
         self.assertEqual(first, second)
         self.assertTrue(validate_retention_plan(first))
+        self.assertTrue(first["apply_supported"])
+        self.assertTrue(first["authority"]["requires_verified_backup"])
+        self.assertEqual(set(first["id_set_digests"]), set(RETENTION_CANDIDATE_KEYS))
         altered = json.loads(json.dumps(first))
         altered["message_count"] = 15
         self.assertFalse(validate_retention_plan(altered))
@@ -135,9 +176,13 @@ class HonchoPilotTest(unittest.TestCase):
         self.assertIn(":'cutoff'", sql)
         self.assertNotIn("public-pilot", sql)
         self.assertLess(sql.index("DELETE FROM queue"), sql.index("DELETE FROM messages"))
-        self.assertIn("WITH RECURSIVE impacted", sql)
-        self.assertIn("UPDATE documents", sql)
-        self.assertLess(sql.index("UPDATE documents"), sql.index("DELETE FROM messages"))
+        self.assertIn("jl_message_ids", sql)
+        self.assertIn("jl_embedding_ids", sql)
+        self.assertIn("pg_stat_activity", sql)
+        self.assertIn("LOCK TABLE messages, message_embeddings", sql)
+        self.assertIn("DELETE FROM documents", sql)
+        self.assertLess(sql.index("DELETE FROM documents"), sql.index("DELETE FROM messages"))
+        self.assertIn("DELETE FROM active_queue_sessions", sql)
         self.assertIn("expected_document_count", sql)
         self.assertIn("expected_message_count", sql)
         self.assertIn("ON_ERROR_STOP", sql)
@@ -234,6 +279,9 @@ class HonchoPilotTest(unittest.TestCase):
             generated_at="2026-09-01T00:00:00Z",
         )
         self.assertTrue(validate_participant_deletion_plan(plan))
+        self.assertTrue(plan["apply_supported"])
+        self.assertTrue(plan["authority"]["can_delete"])
+        self.assertTrue(plan["authority"]["requires_verified_backup"])
         blocked = {key: list(value) for key, value in candidate_sets.items()}
         blocked["conflicting_peers"] = ["another-human"]
         with self.assertRaisesRegex(ValueError, "conflicting_peers"):
@@ -266,7 +314,10 @@ class HonchoPilotTest(unittest.TestCase):
         receipt = build_honcho_quiescence_receipt(
             database_oid_value=123,
             schema_fingerprint_value="sha256:" + "c" * 64,
-            service_labels=["ai.hermes.honcho.api", "ai.hermes.honcho.deriver"],
+            service_labels=[
+                "ai.john-lomein.pilot.public-honcho.child.api",
+                "ai.john-lomein.pilot.public-honcho.child.deriver",
+            ],
             observed_at="2026-09-01T00:00:00Z",
             expires_at="2026-09-01T00:05:00Z",
             nonce="d" * 64,
@@ -361,7 +412,7 @@ class HonchoPilotTest(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 reserve_private_json(target, {"state": "applied"})
 
-    def test_applied_tombstones_block_service_restore_until_replayed(self):
+    def test_v1_tombstones_are_never_executable(self):
         from john_lomein_honcho_pilot import applied_deletion_tombstones, sha256_json
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
@@ -374,17 +425,55 @@ class HonchoPilotTest(unittest.TestCase):
             target = root / "one.json"
             target.write_text(json.dumps(payload), encoding="utf-8")
             target.chmod(0o600)
-            pending = dict(payload)
-            pending["state"] = "pending"
-            pending.pop("tombstone_digest")
-            pending["tombstone_digest"] = sha256_json(pending)
-            pending_path = root / "two.json"
-            pending_path.write_text(json.dumps(pending), encoding="utf-8")
-            pending_path.chmod(0o600)
-            found = applied_deletion_tombstones(root)
-            self.assertEqual(len(found), 2)
-            self.assertEqual({item["state"] for item in found}, {"applied", "pending"})
-            self.assertEqual(found[0]["tombstone_digest"], payload["tombstone_digest"])
+            with self.assertRaisesRegex(ValueError, "tombstone"):
+                applied_deletion_tombstones(root)
+
+    def test_apply_entrypoints_are_enabled_but_remain_digest_backup_and_quiescence_bound(self):
+        import john_lomein_honcho_pilot as pilot
+
+        with mock.patch.object(
+            pilot,
+            "_apply_participant_deletion",
+            return_value={"applied": True},
+        ) as participant:
+            result = pilot.apply_participant_deletion(
+                database="honcho_local",
+                plan={"plan_digest": "sha256:" + "a" * 64},
+                confirm_digest="sha256:" + "a" * 64,
+                backup_path=Path("/private/backup.dump"),
+                quiescence_receipt={"receipt_digest": "x"},
+            )
+        self.assertTrue(result["applied"])
+        participant.assert_called_once()
+
+        with self.assertRaisesRegex(ValueError, "confirmation digest"):
+            pilot.apply_participant_deletion(
+                database="honcho_local",
+                plan={"plan_digest": "sha256:" + "a" * 64},
+                confirm_digest="sha256:" + "b" * 64,
+                backup_path=Path("/private/backup.dump"),
+                quiescence_receipt={"receipt_digest": "x"},
+            )
+
+    def test_public_supervisor_asset_is_deployed_and_doctor_checked(self):
+        deploy = (ROOT / "scripts" / "deploy-instance.sh").read_text(encoding="utf-8")
+        doctor = (ROOT / "scripts" / "doctor-instance.py").read_text(encoding="utf-8")
+        supervisor = ROOT / "scripts" / "john_lomein_public_honcho_service.py"
+        self.assertTrue(supervisor.is_file())
+        self.assertIn(supervisor.name, deploy)
+        self.assertIn("public-service-install", deploy)
+        self.assertNotIn("install-startup-gates", deploy)
+        self.assertNotIn('create_product_cron "every 24h"', deploy)
+        self.assertIn("Public Honcho supervisor", doctor)
+
+    def test_personal_launchagent_labels_are_absent_from_public_service_code(self):
+        for path in (
+            ROOT / "scripts" / "john_lomein_honcho_pilot.py",
+            ROOT / "scripts" / "john_lomein_public_honcho_service.py",
+        ):
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("ai.hermes.honcho.api", text)
+            self.assertNotIn("ai.hermes.honcho.deriver", text)
 
     def test_restore_verify_does_not_require_source_database_name(self):
         from john_lomein_honcho_pilot import parser
@@ -392,6 +481,43 @@ class HonchoPilotTest(unittest.TestCase):
         args = parser().parse_args(["restore-verify", "--backup", "/private/backup.dump"])
         self.assertEqual(args.command, "restore-verify")
         self.assertEqual(args.backup, "/private/backup.dump")
+
+        replay = parser().parse_args(
+            [
+                "tombstone-replay",
+                "--database", "honcho_restored",
+                "--manifest", "/private/instance.yaml",
+                "--tombstone", "/private/tombstone.json",
+                "--confirm-tombstone-digest", "a" * 64,
+                "--backup", "/private/backup.dump",
+                "--quiescence-receipt", "/private/quiescence.json",
+            ]
+        )
+        self.assertEqual(replay.command, "tombstone-replay")
+        self.assertEqual(replay.confirm_tombstone_digest, "a" * 64)
+
+    def test_replay_is_digest_confirmed_and_delegates_to_recoverable_engine(self):
+        import john_lomein_honcho_pilot as pilot
+
+        tombstone = {"tombstone_digest": "a" * 64}
+        with mock.patch.object(
+            pilot,
+            "_replay_tombstone",
+            return_value={"verified": True},
+        ) as engine:
+            result = pilot.replay_tombstone(
+                tombstone=tombstone,
+                confirm_tombstone_digest="a" * 64,
+                database="honcho_restored",
+            )
+        self.assertTrue(result["verified"])
+        engine.assert_called_once()
+        with self.assertRaisesRegex(ValueError, "confirmation digest"):
+            pilot.replay_tombstone(
+                tombstone=tombstone,
+                confirm_tombstone_digest="b" * 64,
+                database="honcho_restored",
+            )
 
     def test_backup_command_is_custom_format_and_private_destination(self):
         from john_lomein_honcho_pilot import backup_commands

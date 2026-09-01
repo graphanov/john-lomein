@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 import hashlib, json, os, plistlib, re, shutil, stat, subprocess, sys
+from datetime import datetime, timezone
 from pathlib import Path
 import yaml
 ROOT=Path(__file__).resolve().parents[1]
@@ -43,6 +44,15 @@ from john_lomein_honcho_contract import (
     probe_honcho_health,
     profile_honcho_errors,
 )
+from john_lomein_guide_runtime_preflight import (
+    verify_guide_runtime,
+)
+from john_lomein_honcho_pilot import honcho_startup_blockers, tombstone_state_summary
+from john_lomein_public_honcho_service import (
+    assert_dedicated_database,
+    validate_pinned_checkout,
+    validate_retention_receipt,
+)
 from john_lomein_gateway_lock_contract import (
     GatewayLockContractError,
     gateway_lock_root,
@@ -51,7 +61,7 @@ from john_lomein_gateway_lock_contract import (
 from john_lomein_model_isolation import run_isolation_canary
 from john_lomein_auth_projection import (
     AuthProjectionError,
-    verify_projection as verify_auth_projection,
+    verify_model_credentials_scrubbed,
 )
 from john_lomein_continuity import ContinuityError, verify_store as verify_continuity_store
 from john_lomein_continuity_importer import (
@@ -269,7 +279,7 @@ def normalize_skill_frontmatter_text(text):
     except Exception:
         return text
 def resolve_hermes_python(env, H):
-    explicit=env.get('HERMES_PYTHON') or os.environ.get('HERMES_PYTHON')
+    explicit=env.get('HERMES_PYTHON')
     if explicit and Path(explicit).expanduser().exists():
         return str(Path(explicit).expanduser())
     hermes_bin=shutil.which('hermes')
@@ -957,23 +967,22 @@ def main():
         str((model.get('fallback') or {}).get('provider') or ''),
     }:
         try:
-            auth_projection=verify_auth_projection(
+            auth_projection=verify_model_credentials_scrubbed(
                 H,
                 profiles=[
                     H/'profiles'/profile
                     for profile in role_profiles.values()
                 ],
-                authority_home=Path(env['JOHN_LOMEIN_AUTH_AUTHORITY_HOME']),
             )
             note(
                 'OK',
-                'OpenAI Codex auth is access-only and synchronized '
+                'OpenAI Codex credentials are absent from model homes '
                 f"across targets={auth_projection['targets']}",
             )
         except AuthProjectionError as exc:
             note(
                 'FAIL',
-                f'OpenAI Codex access projection failed closed: {exc}',
+                f'OpenAI Codex model credential scrub failed closed: {exc}',
             )
     steward_private=H/'private'/'learning-steward'
     private_memory=steward_private/'mnemosyne'/'data'
@@ -1210,8 +1219,11 @@ def main():
                     raise ValueError('; '.join(honcho_errors))
                 note('OK',f'{profile} local Honcho contract is exact')
                 settings=honcho_settings(bot,instance_slug=slug)
-                probe_honcho_health(settings['base_url'],timeout=min(5.0,float(settings['timeout'])))
-                note('OK',f'{profile} local Honcho provider is reachable')
+                if effective_authority['guide_required']:
+                    probe_honcho_health(settings['base_url'],timeout=min(5.0,float(settings['timeout'])))
+                    note('OK',f'{profile} dedicated public Honcho provider is reachable')
+                else:
+                    note('OK',f'{profile} dedicated public Honcho provider is owner-gated/inactive')
             except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
                 note('FAIL',f'{profile} local Honcho contract invalid: {exc}')
             managed_dir=managed_policy_directory(H,profile)
@@ -1307,6 +1319,28 @@ def main():
                 if plugin_asset_ok
                 else f'{profile} protected-release approval plugin asset scope is unsafe or stale',
             )
+            lifecycle_plugin='john-lomein-guide-lifecycle'
+            lifecycle_scope_ok=(
+                lifecycle_plugin in enabled_plugins
+                and lifecycle_plugin not in disabled_plugins
+            ) if role=='guide' else (
+                lifecycle_plugin not in enabled_plugins
+                and lifecycle_plugin in disabled_plugins
+            )
+            lifecycle_path=pdir/'plugins'/lifecycle_plugin
+            lifecycle_asset_ok=(
+                lifecycle_path.is_symlink()
+                and lifecycle_path.resolve()
+                == (H/'plugins'/lifecycle_plugin).resolve()
+            ) if role=='guide' else not (
+                lifecycle_path.exists() or lifecycle_path.is_symlink()
+            )
+            note(
+                'OK' if lifecycle_scope_ok and lifecycle_asset_ok else 'FAIL',
+                f'{profile} Guide lifecycle plugin scope and binding are exact'
+                if lifecycle_scope_ok and lifecycle_asset_ok
+                else f'{profile} Guide lifecycle plugin scope or binding is unsafe',
+            )
             note('OK' if term.get('home_mode')=='profile' else 'FAIL', f'{profile} terminal HOME isolated to profile')
             note('OK' if Path(term.get('cwd','')).expanduser()==local else 'WARN', f'{profile} workdir points at managed checkout' if Path(term.get('cwd','')).expanduser()==local else f'{profile} workdir={term.get("cwd")}')
             note('OK' if not (term.get('dangerous_command_permanent_allowlist') or []) else 'WARN', f'{profile} dangerous-command permanent allowlist empty')
@@ -1333,6 +1367,28 @@ def main():
                 )
             else:
                 note('OK' if profile_has_gh_auth else 'WARN', f'{profile} profile-local gh auth works' if profile_has_gh_auth else f'{profile} profile-local gh auth missing')
+    guide_profile=role_profiles['guide']
+    c,o,e=sh(
+        ['hermes','-p',guide_profile,'plugins','list','--json'],
+        env=env,
+        timeout=45,
+    )
+    try:
+        if c!=0:
+            raise ValueError(e or o or 'Hermes plugin inventory failed')
+        guide_runtime=verify_guide_runtime(
+            runtime_home=H,
+            manifest=bot,
+            guide_profile=guide_profile,
+            expected_workspace=honcho_settings(bot,instance_slug=slug)['workspace'],
+            plugin_inventory_loader=lambda: json.loads(o),
+        )
+        note(
+            'OK',
+            'Guide lifecycle plugin is runtime-discovered and public workspace binding is exact',
+        )
+    except Exception as exc:
+        note('FAIL',f'Guide runtime lifecycle/workspace preflight failed: {exc}')
     c,o,e=sh(['hermes','-p',role_profiles['maintainer'],'cron','list','--all'],env=env,timeout=40)
     if c==0:
         core_crons=[f'john-lomein-{slug}-watchdog',f'john-lomein-{slug}-maintainer',f'john-lomein-{slug}-forge-cycle',f'john-lomein-{slug}-overwatch']
@@ -1352,7 +1408,88 @@ def main():
             present=name in o
             note('OK' if present==expected else 'FAIL', f'cron state correct in instance runtime: {name} expected={expected} present={present}' if present==expected else f'cron state mismatch in instance runtime: {name} expected={expected} present={present}')
     else: note('FAIL',f'instance cron list failed: {e or o}')
-    runtime_scripts=['john_lomein_auth_projection.py','john_lomein_autonomy.py','john_lomein_collaboration_contract.py','john_lomein_comment_templates.py','john_lomein_container_verifier.py','john_lomein_continuity.py','john_lomein_continuity_importer.py','john_lomein_continuity_protocol.py','john_lomein_factory_receipts.py','john_lomein_gateway_lock_contract.py','john_lomein_guide_lifecycle.py','john_lomein_owner_override.py','john_lomein_proposal.py','john_lomein_review_quorum.py','john_lomein_manifest_contract.py','john_lomein_honcho_contract.py','john_lomein_honcho_pilot.py','honcho-embedding-recovery-candidates.sql','honcho-participant-candidates.sql','honcho-participant-delete.sql','john_lomein_memory_boundary_migration.py','john_lomein_memory_contract.py','john_lomein_model_isolation.py','john_lomein_owner_actions.py','john_lomein_plugin_contract.py','john_lomein_profile_contract.py','john_lomein_protected_actions.py','john_lomein_public_safety.py','john_lomein_release_packets.py','john_lomein_scoped_publication.py','john_lomein_service_registry.py','john-lomein-continuity-hook-canary.py','john-lomein-factory-simulate.py','john-lomein-trust-assertion.py','john-lomein-auth-env.sh','john-lomein-diagnostic-tick.sh','john-lomein-watchdog.sh','john-lomein-honcho-watchdog.py','john-lomein-honcho-watchdog.sh','john-lomein-maintainer-trigger.sh','john-lomein-maintainer-prompt.txt','john-lomein-worker.py','john-lomein-gh-guard.py','john-lomein-git-guard.py','john-lomein-protected-submit.py','john-lomein-issue-intake.py','john-lomein-issue-triage.py','john-lomein-osc-portfolio-steward.py','john-lomein-osc-portfolio-trigger.sh','john-lomein-release-approve.py','john-lomein-release-bundler.py','john-lomein-release-executor.py','john-lomein-release-submit.py','john-lomein-forge-trigger.sh','john-lomein-exact-head-review.py','john-lomein-forge-orchestrator.py','john-lomein-omh-implementation.py','john-lomein-queue-health.py','john-lomein-cross-instance-learning-digest.py','john-lomein-learning-steward.py','john-lomein-learning-trigger.sh','john-lomein-overwatch-trigger.sh','john-lomein-overwatch-scan.py','john-lomein-overwatch-post.sh','john-lomein-overwatch-prompt.txt','john-lomein-keepawake.sh','install-runtime-supervisor.sh','uninstall-runtime-supervisor.sh','repair-profile-gh-auth.py','stage_profile_distribution.py','read-instance-env.py','apply-guide-discord-config.py','install-guide-gateway.sh']
+    runtime_scripts=[
+        'john_lomein_auth_projection.py',
+        'john_lomein_autonomy.py',
+        'john_lomein_collaboration_contract.py',
+        'john_lomein_comment_templates.py',
+        'john_lomein_container_verifier.py',
+        'john_lomein_continuity.py',
+        'john_lomein_continuity_importer.py',
+        'john_lomein_continuity_protocol.py',
+        'john_lomein_factory_receipts.py',
+        'john_lomein_gateway_lock_contract.py',
+        'john_lomein_guide_lifecycle.py',
+        'john_lomein_guide_runtime_preflight.py',
+        'john_lomein_owner_override.py',
+        'john_lomein_proposal.py',
+        'john_lomein_review_quorum.py',
+        'john_lomein_manifest_contract.py',
+        'john_lomein_honcho_contract.py',
+        'john_lomein_honcho_pilot.py',
+        'john_lomein_honcho_broker.py',
+        'john_lomein_public_honcho_service.py',
+        'honcho-embedding-recovery-candidates.sql',
+        'honcho-participant-candidates.sql',
+        'honcho-participant-delete.sql',
+        'honcho-retention-candidates.sql',
+        'honcho-retention-delete.sql',
+        'john_lomein_memory_boundary_migration.py',
+        'john_lomein_memory_contract.py',
+        'john_lomein_model_isolation.py',
+        'john_lomein_provider_broker.py',
+        'john_lomein_provider_bootstrap.py',
+        'john_lomein_owner_actions.py',
+        'john_lomein_plugin_contract.py',
+        'john_lomein_profile_contract.py',
+        'john_lomein_protected_actions.py',
+        'john_lomein_public_safety.py',
+        'john_lomein_release_packets.py',
+        'john_lomein_scoped_publication.py',
+        'john_lomein_service_registry.py',
+        'john-lomein-continuity-hook-canary.py',
+        'john-lomein-factory-simulate.py',
+        'john-lomein-trust-assertion.py',
+        'john-lomein-auth-env.sh',
+        'john-lomein-diagnostic-tick.sh',
+        'john-lomein-watchdog.sh',
+        'john-lomein-honcho-watchdog.py',
+        'john-lomein-honcho-watchdog.sh',
+        'john-lomein-maintainer-trigger.sh',
+        'john-lomein-maintainer-prompt.txt',
+        'john-lomein-worker.py',
+        'john-lomein-gh-guard.py',
+        'john-lomein-git-guard.py',
+        'john-lomein-protected-submit.py',
+        'john-lomein-issue-intake.py',
+        'john-lomein-issue-triage.py',
+        'john-lomein-osc-portfolio-steward.py',
+        'john-lomein-osc-portfolio-trigger.sh',
+        'john-lomein-release-approve.py',
+        'john-lomein-release-bundler.py',
+        'john-lomein-release-executor.py',
+        'john-lomein-release-submit.py',
+        'john-lomein-forge-trigger.sh',
+        'john-lomein-exact-head-review.py',
+        'john-lomein-forge-orchestrator.py',
+        'john-lomein-omh-implementation.py',
+        'john-lomein-queue-health.py',
+        'john-lomein-cross-instance-learning-digest.py',
+        'john-lomein-learning-steward.py',
+        'john-lomein-learning-trigger.sh',
+        'john-lomein-overwatch-trigger.sh',
+        'john-lomein-overwatch-scan.py',
+        'john-lomein-overwatch-post.sh',
+        'john-lomein-overwatch-prompt.txt',
+        'john-lomein-keepawake.sh',
+        'install-runtime-supervisor.sh',
+        'uninstall-runtime-supervisor.sh',
+        'repair-profile-gh-auth.py',
+        'stage_profile_distribution.py',
+        'read-instance-env.py',
+        'apply-guide-discord-config.py',
+        'install-guide-gateway.sh',
+    ]
     if not omh_enabled(bot):
         runtime_scripts=[name for name in runtime_scripts if name != 'john-lomein-omh-implementation.py']
     for script in runtime_scripts:
@@ -1555,8 +1692,92 @@ def main():
     honcho_tombstone_root=H/'private'/'honcho-deletion-tombstones'
     honcho_tombstones_ok=safe_runtime_directory(honcho_tombstone_root)
     note('OK' if honcho_state_ok and honcho_tombstones_ok else 'FAIL', 'Honcho pause and tombstone directories are private' if honcho_state_ok and honcho_tombstones_ok else 'Honcho pause or tombstone directory is missing or unsafe')
-    tombstone_entries=list(honcho_tombstone_root.iterdir()) if honcho_tombstones_ok else []
-    note('OK' if not tombstone_entries else 'FAIL', 'no deletion tombstone blocks service use' if not tombstone_entries else 'deletion tombstone replay is required before service use')
+    public_honcho=honcho_settings(bot,instance_slug=slug)
+    supervisor_asset=H/'scripts'/'john_lomein_public_honcho_service.py'
+    supervisor_label=public_honcho['supervisor_label']
+    supervisor_plist=Path.home()/'Library'/'LaunchAgents'/f'{supervisor_label}.plist'
+    supervisor_ok=not effective_authority['guide_required']
+    if effective_authority['guide_required']:
+        try:
+            supervisor_data=plistlib.loads(supervisor_plist.read_bytes())
+            supervisor_arguments=[str(item) for item in supervisor_data.get('ProgramArguments') or []]
+            supervisor_ok=(
+                supervisor_data.get('Label')==supervisor_label
+                and supervisor_arguments[1:3]==[str(supervisor_asset),'supervise']
+                and supervisor_arguments[3:]==['--manifest',str(H/'instance.yaml')]
+                and supervisor_data.get('KeepAlive') is True
+                and not any('fastapi' in item or 'src.deriver' in item for item in supervisor_arguments)
+            )
+        except Exception:
+            supervisor_ok=False
+    note(
+        'OK' if supervisor_ok else 'FAIL',
+        'Public Honcho supervisor is product-owned and is the only API/deriver launch boundary'
+        if supervisor_ok
+        else 'Public Honcho supervisor plist is missing, stale, or directly executes a child',
+    )
+    dedicated_runtime_ok=not effective_authority['guide_required']
+    database_identity={}
+    try:
+        if effective_authority['guide_required']:
+            checkout=validate_pinned_checkout(
+                Path(public_honcho['server_root']),
+                expected_url=public_honcho['checkout_url'],
+                expected_commit=public_honcho['checkout_commit'],
+            )
+            database_identity=assert_dedicated_database(
+                public_honcho['database'],public_honcho['workspace']
+            )
+            dedicated_runtime_ok=checkout['clean'] is True
+    except Exception:
+        dedicated_runtime_ok=False
+    note(
+        'OK' if dedicated_runtime_ok else 'FAIL',
+        'Public Honcho checkout is clean/pinned and PostgreSQL is single-workspace'
+        if dedicated_runtime_ok
+        else 'Public Honcho checkout or dedicated PostgreSQL isolation is invalid',
+    )
+    try:
+        tombstone_summary=tombstone_state_summary(honcho_tombstone_root)
+        tombstone_blockers=(
+            honcho_startup_blockers(
+                honcho_tombstone_root,
+                database=public_honcho['database'],
+                workspace=public_honcho['workspace'],
+            )
+            if effective_authority['guide_required']
+            else []
+        )
+        tombstone_filesystem_ok=tombstone_summary['blocking_without_database_check']==0 and not tombstone_blockers
+    except Exception:
+        tombstone_filesystem_ok=False
+        tombstone_summary={}
+    note(
+        'OK' if tombstone_filesystem_ok else 'FAIL',
+        'Honcho tombstones are applied-clean; pending or resurrected exact IDs are absent'
+        if tombstone_filesystem_ok
+        else f'Honcho exact-ID tombstone replay is required: {tombstone_summary}',
+    )
+    retention_receipt_ok=not effective_authority['guide_required']
+    try:
+        if effective_authority['guide_required']:
+            retention_receipt=json.loads(
+                (H/'state'/'honcho'/'retention-latest.json').read_text(encoding='utf-8')
+            )
+            retention_receipt_ok=validate_retention_receipt(
+                retention_receipt,
+                expected_database_identity_digest=database_identity['database_identity_digest'],
+                expected_workspace=public_honcho['workspace'],
+                now=datetime.now(timezone.utc),
+            )
+    except Exception:
+        retention_receipt_ok=False
+    note(
+        'OK' if retention_receipt_ok else 'FAIL',
+        'Public Honcho retention receipt is fresh within the five-minute active-store lag'
+        if retention_receipt_ok
+        else 'Public Honcho retention receipt is missing, malformed, stale, or identity-mismatched',
+    )
     pause_path=H/'state'/'honcho'/'INGESTION_PAUSED.json'
     pause_safe=(not pause_path.exists()) or safe_runtime_public_key(pause_path)
     note('OK' if pause_safe else 'FAIL', 'Honcho ingestion pause receipt is absent or private' if pause_safe else 'Honcho ingestion pause receipt is unsafe')
@@ -1725,6 +1946,7 @@ def main():
             scheduler_label,
             role_profiles['maintainer'],
             H,
+            require_isolation=True,
         )
     else:
         note('OK' if not launch_loaded(scheduler_label) else 'FAIL', f'scheduler LaunchAgent not required while owner-gated' if not launch_loaded(scheduler_label) else f'scheduler LaunchAgent loaded while owner-gated: {scheduler_label}')

@@ -1626,7 +1626,9 @@ def normalize_receipt_envelope(raw: Any) -> dict[str, Any]:
 
 def _openssl() -> str:
     for candidate in (
+        "/opt/homebrew/opt/openssl@3/bin/openssl",
         "/opt/homebrew/bin/openssl",
+        "/usr/local/opt/openssl@3/bin/openssl",
         "/usr/local/bin/openssl",
         "/usr/bin/openssl",
     ):

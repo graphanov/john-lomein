@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Broker OpenAI Codex access credentials into John Lomein runtimes.
+"""Manage the controller-owned OpenAI Codex credential authority.
 
 The real user's Hermes auth store is the sole owner of the rotating OAuth
-refresh-token chain.  John Lomein runtime roots and role profiles receive only
-a short-lived access-token projection represented as a manual API-key pool
-entry.  A model process can therefore read a usable bearer token without being
-able to consume, replace, or copy the single-use refresh token.
+chain. Deployed model homes are scrubbed of Codex singleton and pool material;
+the model-facing provider path is a per-process Unix broker that never returns
+the access token. Historical projection/recovery helpers remain for explicit
+upgrade recovery, but deployment, watchdog, doctor, and model launch paths use
+the scrubbed contract.
 
 This module deliberately has no dependency on Hermes at import time.  Refresh
 work is delegated to Hermes' own isolated interpreter, where its credential
@@ -910,7 +911,7 @@ def sync_projection(
     refresh_horizon_seconds: int = DEFAULT_REFRESH_HORIZON_SECONDS,
     _refresh: Callable[[Path], str] | None = None,
 ) -> dict[str, Any]:
-    """Refresh the authority and atomically project one access-only row."""
+    """Legacy explicit access projection retained for upgrade recovery only."""
 
     normalized_provider = str(provider or "").strip().lower()
     if normalized_provider != PROVIDER:
@@ -1090,6 +1091,99 @@ def verify_projection(
     }
 
 
+def _scrubbed_store(store: Mapping[str, Any], *, provider: str) -> dict[str, Any]:
+    """Remove one provider's model-readable material, preserving other state."""
+
+    result = copy.deepcopy(dict(store))
+    changed = False
+    for field in ("providers", "credential_pool", "suppressed_sources"):
+        value = result.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, Mapping):
+            raise _fail(f"auth_projection_scrub_{field}_invalid")
+        cleaned = copy.deepcopy(dict(value))
+        if provider in cleaned:
+            cleaned.pop(provider)
+            changed = True
+        result[field] = cleaned
+    if result.get("active_provider") == provider:
+        result.pop("active_provider", None)
+        changed = True
+    if changed:
+        result["updated_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    return result
+
+
+def scrub_model_credentials(
+    runtime_home: Path,
+    *,
+    profiles: Sequence[os.PathLike[str] | str] = (),
+    provider: str = PROVIDER,
+) -> dict[str, Any]:
+    """Atomically remove stale provider projections from every model home."""
+
+    normalized_provider = str(provider or "").strip().lower()
+    if normalized_provider != PROVIDER:
+        return {
+            "status": "not_applicable",
+            "provider": normalized_provider,
+            "targets": 0,
+        }
+    homes = _projection_homes(runtime_home, profiles)
+    for index, home in enumerate(homes):
+        auth_path = home / "auth.json"
+        with _auth_lock(auth_path):
+            current = _read_json_file(
+                auth_path,
+                label=f"auth_projection_scrub_{index}",
+                missing_ok=True,
+            )
+            cleaned = _scrubbed_store(current, provider=PROVIDER)
+            if cleaned != current:
+                _atomic_json_write(
+                    auth_path,
+                    cleaned,
+                    label=f"auth_projection_scrub_{index}",
+                )
+    return {"status": "ok", "provider": PROVIDER, "targets": len(homes)}
+
+
+def verify_model_credentials_scrubbed(
+    runtime_home: Path,
+    *,
+    profiles: Sequence[os.PathLike[str] | str] = (),
+    provider: str = PROVIDER,
+) -> dict[str, Any]:
+    """Verify no model home retains a provider singleton or pool row."""
+
+    normalized_provider = str(provider or "").strip().lower()
+    if normalized_provider != PROVIDER:
+        return {
+            "status": "not_applicable",
+            "provider": normalized_provider,
+            "targets": 0,
+        }
+    homes = _projection_homes(runtime_home, profiles)
+    for index, home in enumerate(homes):
+        auth_path = home / "auth.json"
+        with _auth_lock(auth_path):
+            store = _read_json_file(
+                auth_path,
+                label=f"auth_projection_scrub_verify_{index}",
+                missing_ok=True,
+            )
+        for field in ("providers", "credential_pool", "suppressed_sources"):
+            value = store.get(field, {})
+            if not isinstance(value, Mapping):
+                raise _fail(f"auth_projection_scrub_verify_{field}_invalid")
+            if PROVIDER in value:
+                raise _fail(f"auth_projection_scrub_verify_{field}_present")
+        if store.get("active_provider") == PROVIDER:
+            raise _fail("auth_projection_scrub_verify_active_provider_present")
+    return {"status": "ok", "provider": PROVIDER, "targets": len(homes)}
+
+
 def recover_authority(
     runtime_home: Path,
     *,
@@ -1220,7 +1314,7 @@ def recover_authority(
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Broker John Lomein OpenAI Codex access projections."
+        description="Manage John Lomein controller auth and scrub model homes."
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -1242,6 +1336,12 @@ def _parser() -> argparse.ArgumentParser:
     verify = commands.add_parser("verify")
     common(verify)
     verify.add_argument("--horizon-seconds", type=int, default=0)
+
+    scrub = commands.add_parser("scrub")
+    common(scrub)
+
+    verify_scrubbed = commands.add_parser("verify-scrubbed")
+    common(verify_scrubbed)
 
     recover = commands.add_parser("recover-authority")
     recover.add_argument("--runtime-home", type=Path, required=True)
@@ -1269,6 +1369,18 @@ def _public_main(argv: Sequence[str]) -> int:
             authority_home=args.authority_home,
             provider=args.provider,
             horizon_seconds=args.horizon_seconds,
+        )
+    elif args.command == "scrub":
+        result = scrub_model_credentials(
+            args.runtime_home,
+            profiles=args.profile,
+            provider=args.provider,
+        )
+    elif args.command == "verify-scrubbed":
+        result = verify_model_credentials_scrubbed(
+            args.runtime_home,
+            profiles=args.profile,
+            provider=args.provider,
         )
     else:
         result = recover_authority(

@@ -114,6 +114,7 @@ class RuntimeProbe:
     runtime_root: Path
     stdlib: Path
     libpython: Path
+    libpython_name: str
     implementation: str
     version: str
     abi_tag: str
@@ -293,6 +294,7 @@ value = {
     "implementation": sys.implementation.name,
     "ldlibrary": sysconfig.get_config_var("LDLIBRARY"),
     "libdir": os.path.realpath(sysconfig.get_config_var("LIBDIR")),
+    "pythonframework": sysconfig.get_config_var("PYTHONFRAMEWORK"),
     "stdlib": os.path.realpath(sysconfig.get_path("stdlib")),
     "system": platform.system().lower(),
     "version": "%d.%d.%d" % sys.version_info[:3],
@@ -300,6 +302,38 @@ value = {
 print(json.dumps(value, allow_nan=False, ensure_ascii=False,
                  separators=(",", ":"), sort_keys=True))
 """
+
+
+def _runtime_library_from_probe(
+    value: Mapping[str, Any],
+    *,
+    runtime_root: Path,
+    major: str,
+    minor: str,
+) -> tuple[Path, str]:
+    ldlibrary = value.get("ldlibrary")
+    libdir = value.get("libdir")
+    framework = value.get("pythonframework")
+    if (
+        isinstance(ldlibrary, str)
+        and "/" not in ldlibrary
+        and "\\" not in ldlibrary
+        and ldlibrary.startswith("libpython")
+        and ldlibrary.endswith(".dylib")
+        and libdir == str(runtime_root / "lib")
+        and framework in {"", None}
+    ):
+        return runtime_root / "lib" / ldlibrary, ldlibrary
+    if (
+        framework == "Python"
+        and ldlibrary == "Python"
+        and libdir == str(runtime_root / "lib")
+    ):
+        return (
+            runtime_root / "Python",
+            f"libpython{major}.{minor}.dylib",
+        )
+    raise _error("capture_bundle_build_libpython_layout_invalid")
 
 
 def probe_runtime(trusted_python: Path | str) -> RuntimeProbe:
@@ -335,6 +369,7 @@ def probe_runtime(trusted_python: Path | str) -> RuntimeProbe:
         "implementation",
         "ldlibrary",
         "libdir",
+        "pythonframework",
         "stdlib",
         "system",
         "version",
@@ -372,17 +407,14 @@ def probe_runtime(trusted_python: Path | str) -> RuntimeProbe:
     expected_stdlib = runtime_root / "lib" / f"python{major}.{minor}"
     if stdlib != expected_stdlib:
         raise _error("capture_bundle_build_stdlib_layout_invalid")
-    if (
-        not isinstance(value.get("ldlibrary"), str)
-        or "/" in value["ldlibrary"]
-        or "\\" in value["ldlibrary"]
-        or not value["ldlibrary"].startswith("libpython")
-        or not value["ldlibrary"].endswith(".dylib")
-        or value.get("libdir") != str(runtime_root / "lib")
-    ):
-        raise _error("capture_bundle_build_libpython_layout_invalid")
+    libpython_path, libpython_name = _runtime_library_from_probe(
+        value,
+        runtime_root=runtime_root,
+        major=major,
+        minor=minor,
+    )
     libpython = _real_regular_file(
-        runtime_root / "lib" / value["ldlibrary"],
+        libpython_path,
         code="capture_bundle_build_libpython",
     )
     return RuntimeProbe(
@@ -390,6 +422,7 @@ def probe_runtime(trusted_python: Path | str) -> RuntimeProbe:
         runtime_root=runtime_root,
         stdlib=stdlib,
         libpython=libpython,
+        libpython_name=libpython_name,
         implementation="cpython",
         version=value["version"],
         abi_tag=value["abi_tag"],
@@ -1355,7 +1388,7 @@ def build_capture_native_bundle(
 
     major, minor, _micro = probe.version.split(".")
     executable_relative = "python/bin/python"
-    libpython_relative = f"python/lib/{probe.libpython.name}"
+    libpython_relative = f"python/lib/{probe.libpython_name}"
     stdlib_relative = f"python/lib/python{major}.{minor}"
     transformations: list[dict[str, Any]] = []
     try:

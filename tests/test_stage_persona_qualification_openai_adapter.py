@@ -33,6 +33,7 @@ STAGER_SPEC = importlib.util.spec_from_file_location(
 assert STAGER_SPEC and STAGER_SPEC.loader
 stager = importlib.util.module_from_spec(STAGER_SPEC)
 STAGER_SPEC.loader.exec_module(stager)
+FIXTURE_PYTHON = Path("/usr/bin/python3").resolve(strict=True)
 
 
 def sha256_bytes(value: bytes) -> str:
@@ -56,7 +57,7 @@ class OpenAIQualificationAdapterStagerTests(unittest.TestCase):
             path.chmod(0o700)
 
         self.python = self.operator / "python-binary"
-        shutil.copyfile(Path(sys.executable).resolve(strict=True), self.python)
+        shutil.copyfile(FIXTURE_PYTHON, self.python)
         self.python.chmod(0o700)
 
         self.manifest = yaml.safe_load(

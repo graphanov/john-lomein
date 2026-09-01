@@ -494,6 +494,23 @@ def run_verifier_test(
         return 999, "", str(exc), True
 
 
+def trusted_verifier_git() -> Path | None:
+    """Select the stable macOS Git launcher before developer-tree binaries."""
+
+    return next(
+        (
+            candidate
+            for candidate in (
+                Path("/Library/Developer/CommandLineTools/usr/bin/git"),
+                Path("/Applications/Xcode.app/Contents/Developer/usr/bin/git"),
+                Path("/usr/bin/git"),
+            )
+            if candidate.is_file()
+        ),
+        None,
+    )
+
+
 def run_verifier_git(
     args: list[str],
     *,
@@ -505,17 +522,7 @@ def run_verifier_git(
 ) -> tuple[int, str, str]:
     """Run a read-only Git probe with local executable helpers disabled."""
     sandbox = Path("/usr/bin/sandbox-exec")
-    git = next(
-        (
-            candidate
-            for candidate in (
-                Path("/Applications/Xcode.app/Contents/Developer/usr/bin/git"),
-                Path("/Library/Developer/CommandLineTools/usr/bin/git"),
-            )
-            if candidate.is_file()
-        ),
-        None,
-    )
+    git = trusted_verifier_git()
     if sys.platform != "darwin" or not sandbox.is_file() or git is None:
         return 997, "", "verifier_sandbox_unavailable"
     profile = verifier_sandbox_profile(
@@ -566,17 +573,7 @@ def run_verifier_git_blob(
     if not re.fullmatch(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})", oid):
         return 997, b"", "verifier_blob_oid_invalid"
     sandbox = Path("/usr/bin/sandbox-exec")
-    git = next(
-        (
-            candidate
-            for candidate in (
-                Path("/Applications/Xcode.app/Contents/Developer/usr/bin/git"),
-                Path("/Library/Developer/CommandLineTools/usr/bin/git"),
-            )
-            if candidate.is_file()
-        ),
-        None,
-    )
+    git = trusted_verifier_git()
     if sys.platform != "darwin" or not sandbox.is_file() or git is None:
         return 997, b"", "verifier_sandbox_unavailable"
     profile = verifier_sandbox_profile(
@@ -622,17 +619,7 @@ def run_verifier_git_archive(
 ) -> tuple[int, str]:
     """Export committed HEAD through hardened Git without exposing common Git to tests."""
     sandbox = Path("/usr/bin/sandbox-exec")
-    git = next(
-        (
-            candidate
-            for candidate in (
-                Path("/Applications/Xcode.app/Contents/Developer/usr/bin/git"),
-                Path("/Library/Developer/CommandLineTools/usr/bin/git"),
-            )
-            if candidate.is_file()
-        ),
-        None,
-    )
+    git = trusted_verifier_git()
     if sys.platform != "darwin" or not sandbox.is_file() or git is None:
         return 997, "verifier_sandbox_unavailable"
     if destination.exists() or destination.is_symlink():
