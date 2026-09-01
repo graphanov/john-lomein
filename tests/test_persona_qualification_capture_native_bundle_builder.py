@@ -91,6 +91,24 @@ class CaptureNativeBundleBuilderTests(unittest.TestCase):
         self.assertEqual(source, runtime_root / "Python3")
         self.assertEqual(bundle_name, "libpython3.9.dylib")
 
+    def test_framework_runtime_accepts_python3_with_libpython_ldlibrary(self) -> None:
+        runtime_root = Path(
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/"
+            "Python3.framework/Versions/3.9"
+        )
+        source, bundle_name = builder._runtime_library_from_probe(
+            {
+                "ldlibrary": "libpython3.9.dylib",
+                "libdir": str(runtime_root / "lib"),
+                "pythonframework": "Python3",
+            },
+            runtime_root=runtime_root,
+            major="3",
+            minor="9",
+        )
+        self.assertEqual(source, runtime_root / "Python3")
+        self.assertEqual(bundle_name, "libpython3.9.dylib")
+
     def _source_stdlib(self, name: str = "stdlib") -> Path:
         source = self.root / name
         source.mkdir()

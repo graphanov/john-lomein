@@ -14,14 +14,26 @@ for command in git make uv python3; do
 done
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-SAFE_TMPDIR="${TMPDIR:-$(getconf DARWIN_USER_TEMP_DIR)}"
-SAFE_TMPDIR="$(cd "$SAFE_TMPDIR" && pwd -P)"
-TEMP_ROOT="$(mktemp -d "$SAFE_TMPDIR/jlcm.XXXXXX")"
-chgrp "$(id -g)" "$TEMP_ROOT"
+CLEANUP_WITH_SUDO=0
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  command -v /usr/bin/sudo >/dev/null 2>&1
+  TEMP_ROOT="$(/usr/bin/sudo /usr/bin/mktemp -d /private/var/lib/jlcm.XXXXXX)"
+  /usr/bin/sudo /usr/sbin/chown "$(id -u):$(id -g)" "$TEMP_ROOT"
+  CLEANUP_WITH_SUDO=1
+else
+  SAFE_TMPDIR="${TMPDIR:-$(getconf DARWIN_USER_TEMP_DIR)}"
+  SAFE_TMPDIR="$(cd "$SAFE_TMPDIR" && pwd -P)"
+  TEMP_ROOT="$(mktemp -d "$SAFE_TMPDIR/jlcm.XXXXXX")"
+  chgrp "$(id -g)" "$TEMP_ROOT"
+fi
 /bin/chmod -N "$TEMP_ROOT"
 chmod 700 "$TEMP_ROOT"
 cleanup() {
-  rm -rf "$TEMP_ROOT"
+  if [[ "$CLEANUP_WITH_SUDO" -eq 1 ]]; then
+    /usr/bin/sudo /bin/rm -rf -- "$TEMP_ROOT"
+  else
+    rm -rf "$TEMP_ROOT"
+  fi
 }
 trap cleanup EXIT INT TERM
 

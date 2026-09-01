@@ -325,9 +325,19 @@ def _runtime_library_from_probe(
     ):
         return runtime_root / "lib" / ldlibrary, ldlibrary
     framework_names = {"Python", "Python3"}
+    framework_library_name = (
+        ldlibrary == framework
+        or (
+            isinstance(ldlibrary, str)
+            and "/" not in ldlibrary
+            and "\\" not in ldlibrary
+            and ldlibrary.startswith("libpython")
+            and ldlibrary.endswith(".dylib")
+        )
+    )
     if (
         framework in framework_names
-        and ldlibrary == framework
+        and framework_library_name
     ):
         return (
             runtime_root / framework,
