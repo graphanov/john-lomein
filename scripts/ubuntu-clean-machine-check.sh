@@ -14,11 +14,11 @@ for command in git make uv /usr/bin/sudo /usr/bin/mktemp; do
 done
 
 SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-SECURE_ROOT="$(/usr/bin/sudo /usr/bin/mktemp -d /opt/john-lomein-ci.XXXXXX)"
+SECURE_ROOT="$(/usr/bin/sudo /usr/bin/mktemp -d /var/lib/john-lomein-ci.XXXXXX)"
 case "$SECURE_ROOT" in
-  /opt/john-lomein-ci.*) ;;
+  /var/lib/john-lomein-ci.*) ;;
   *)
-    printf '%s\n' 'secure CI root is outside the fixed /opt namespace' >&2
+    printf '%s\n' 'secure CI root is outside the fixed /var/lib namespace' >&2
     exit 2
     ;;
 esac

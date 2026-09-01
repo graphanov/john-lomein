@@ -73,6 +73,24 @@ class CaptureNativeBundleBuilderTests(unittest.TestCase):
         self.assertEqual(source, runtime_root / "Python")
         self.assertEqual(bundle_name, "libpython3.11.dylib")
 
+    def test_xcode_python3_framework_with_nested_libdir_is_supported(self) -> None:
+        runtime_root = Path(
+            "/Library/Developer/CommandLineTools/Library/Frameworks/"
+            "Python3.framework/Versions/3.9"
+        )
+        source, bundle_name = builder._runtime_library_from_probe(
+            {
+                "ldlibrary": "Python3",
+                "libdir": str(runtime_root / "lib" / "python3.9" / "config"),
+                "pythonframework": "Python3",
+            },
+            runtime_root=runtime_root,
+            major="3",
+            minor="9",
+        )
+        self.assertEqual(source, runtime_root / "Python3")
+        self.assertEqual(bundle_name, "libpython3.9.dylib")
+
     def _source_stdlib(self, name: str = "stdlib") -> Path:
         source = self.root / name
         source.mkdir()

@@ -1190,7 +1190,9 @@ class ModelMemoryIsolationTest(unittest.TestCase):
                 encoding="utf-8",
             )
             hermes.chmod(0o755)
-            (bin_dir / "python3").symlink_to(Path(sys.executable).resolve())
+            (bin_dir / "python3").symlink_to(
+                Path("/usr/bin/python3").resolve(strict=True)
+            )
 
             command = isolated_command(
                 env,

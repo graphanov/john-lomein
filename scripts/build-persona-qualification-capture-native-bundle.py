@@ -324,13 +324,21 @@ def _runtime_library_from_probe(
         and framework in {"", None}
     ):
         return runtime_root / "lib" / ldlibrary, ldlibrary
+    framework_names = {"Python", "Python3"}
+    framework_libdir_safe = False
+    if isinstance(libdir, str):
+        try:
+            Path(libdir).resolve(strict=False).relative_to(runtime_root)
+            framework_libdir_safe = True
+        except ValueError:
+            pass
     if (
-        framework == "Python"
-        and ldlibrary == "Python"
-        and libdir == str(runtime_root / "lib")
+        framework in framework_names
+        and ldlibrary == framework
+        and framework_libdir_safe
     ):
         return (
-            runtime_root / "Python",
+            runtime_root / framework,
             f"libpython{major}.{minor}.dylib",
         )
     raise _error("capture_bundle_build_libpython_layout_invalid")
