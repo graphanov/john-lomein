@@ -123,6 +123,32 @@ def test_resident_supervisor_observes_watchdog_pause_while_children_run():
     assert "public Honcho pause requested" in child_loop
 
 
+def test_latency_health_metrics_only_cover_the_current_fifteen_minute_window():
+    import john_lomein_honcho_pilot as pilot
+
+    captured = {}
+
+    def capture(_database, sql, *, variables=None):
+        captured["sql"] = sql
+        captured["variables"] = variables
+        return {}
+
+    with mock.patch.object(pilot, "psql_json", side_effect=capture), mock.patch.object(
+        pilot, "api_health", return_value=True
+    ):
+        pilot.collect_metrics("public_db", "http://127.0.0.1:19000", "public-space")
+
+    sql = captured["sql"]
+    assert "d.created_at>now()-interval '15 minutes'" in sql
+    assert (
+        "(d.internal_metadata->>'message_created_at')::timestamptz>now()-interval '15 minutes'"
+        in sql
+    )
+    assert "m.created_at>now()-interval '15 minutes'" in sql
+    assert "e.last_sync_at>now()-interval '15 minutes'" in sql
+    assert captured["variables"] == {"workspace": "public-space"}
+
+
 def test_expiry_removes_old_partial_and_manifestless_dumps_only(tmp_path):
     import john_lomein_honcho_pilot as pilot
 
@@ -293,61 +319,20 @@ def _candidate_sets(pilot, *, message_ids=(1,)):
         {
             "message_ids": list(message_ids),
             "message_public_ids": [f"message-{value}" for value in message_ids],
+            "message_identities": [
+                {
+                    "id": value,
+                    "public_id": f"message-{value}",
+                    "fingerprint": "sha256:" + f"{value % 10}" * 64,
+                }
+                for value in message_ids
+            ],
         }
     )
     return candidates
 
 
-def test_reusable_backup_requires_exact_public_scope_and_candidate_coverage():
-    import john_lomein_honcho_pilot as pilot
-
-    now = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
-    covered = _candidate_sets(pilot, message_ids=(1, 2))
-    current = _candidate_sets(pilot, message_ids=(1,))
-    metadata = {
-        "verified": True,
-        "database": "public_database",
-        "created_at": "2026-09-01T11:00:00Z",
-        "retention_coverage": {
-            "schema_version": "john-lomein.honcho-retention-backup-coverage.v1",
-            "database_identity_digest": "a" * 64,
-            "workspace": "public-pilot-memory",
-            "coverage_cutoff": "2026-08-03T12:00:00Z",
-            "candidate_sets": covered,
-            "candidate_sets_digest": pilot.sha256_json(covered),
-        },
-    }
-
-    assert pilot.retention_backup_covers(
-        metadata,
-        expected_database="public_database",
-        database_identity_digest="a" * 64,
-        workspace="public-pilot-memory",
-        cutoff="2026-08-02T12:00:00Z",
-        candidate_sets=current,
-        now=now,
-    )
-    assert not pilot.retention_backup_covers(
-        metadata,
-        expected_database="public_database",
-        database_identity_digest="a" * 64,
-        workspace="public-pilot-memory",
-        cutoff="2026-08-02T12:00:00Z",
-        candidate_sets=_candidate_sets(pilot, message_ids=(1, 3)),
-        now=now,
-    )
-    assert not pilot.retention_backup_covers(
-        metadata,
-        expected_database="public_database",
-        database_identity_digest="a" * 64,
-        workspace="personal",
-        cutoff="2026-08-02T12:00:00Z",
-        candidate_sets=current,
-        now=now,
-    )
-
-
-def test_retention_cycle_reuses_safe_backup_and_samples_final_cutoff_after_selection(
+def test_retention_cycle_creates_plan_bound_backup_after_final_candidate_sample(
     tmp_path, monkeypatch
 ):
     import john_lomein_honcho_pilot as pilot
@@ -392,10 +377,7 @@ def test_retention_cycle_reuses_safe_backup_and_samples_final_cutoff_after_selec
         "enforce_public_backup_quota",
         lambda *_args, **_kwargs: {"count": 1, "bytes": 7},
     )
-    reused = {"path": str(runtime / "private" / "honcho-backups" / "safe.dump")}
-    monkeypatch.setattr(pilot, "find_reusable_public_backup", lambda *_args, **_kwargs: reused)
-    monkeypatch.setattr(pilot, "retention_backup_covers", lambda *_args, **_kwargs: True)
-    create = mock.Mock(side_effect=AssertionError("must reuse verified coverage"))
+    create = mock.Mock(return_value={"verified": True})
     monkeypatch.setattr(pilot, "create_backup", create)
     monkeypatch.setattr(pilot, "create_honcho_quiescence_receipt", lambda *_args, **_kwargs: {"receipt_digest": "q"})
     applied = mock.Mock(return_value={"tombstone_digest": "t" * 64})
@@ -412,9 +394,11 @@ def test_retention_cycle_reuses_safe_backup_and_samples_final_cutoff_after_selec
         database_identity={"database_identity_digest": "a" * 64},
     )
 
-    create.assert_not_called()
-    assert result["backup_reused"] is True
+    create.assert_called_once()
+    assert result["backup_reused"] is False
     assert candidate_calls == ["2026-08-02T11:50:00Z", "2026-08-02T12:00:00Z"]
     plan = applied.call_args.kwargs["plan"]
     assert plan["cutoff"] == "2026-08-02T12:00:00Z"
-    assert applied.call_args.kwargs["backup_path"] == Path(reused["path"])
+    assert create.call_args.kwargs["deletion_plan"] == plan
+    assert create.call_args.kwargs["candidate_sets"] == _candidate_sets(pilot)
+    assert applied.call_args.kwargs["backup_path"] == create.call_args.args[1]

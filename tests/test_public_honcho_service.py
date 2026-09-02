@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import plistlib
 import stat
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -152,10 +154,215 @@ def test_launchagent_can_only_execute_the_product_supervisor(tmp_path):
     ]
     assert decoded["KeepAlive"] is True
     assert decoded["EnvironmentVariables"]["JOHN_LOMEIN_UV"] == "/opt/homebrew/bin/uv"
+    assert decoded["EnvironmentVariables"][
+        "JOHN_LOMEIN_INSTANCE_HERMES_HOME"
+    ] == str(runtime.resolve())
     serialized = json.dumps(decoded, sort_keys=True)
     assert "ai.hermes.honcho" not in serialized
     assert "fastapi" not in serialized
     assert "src.deriver" not in serialized
+
+
+def test_partial_install_failure_removes_login_persistence_and_registry_state(
+    tmp_path, monkeypatch
+):
+    import john_lomein_public_honcho_service as service
+
+    home = tmp_path / "home"
+    runtime = tmp_path / "runtime"
+    manifest_path = tmp_path / "instance.yaml"
+    runtime_manifest = runtime / "instance.yaml"
+    runtime_manifest.parent.mkdir(parents=True)
+    manifest_path.write_text("instance:\n  slug: public-pilot\n", encoding="utf-8")
+    runtime_manifest.write_text(
+        "instance:\n  slug: public-pilot\n", encoding="utf-8"
+    )
+    manifest = dedicated_manifest(runtime)
+    settings = {
+        "base_url": "http://127.0.0.1:19091",
+        "server_root": str(runtime / "services" / "public-honcho" / "server"),
+        "supervisor_label": "ai.john-lomein.public-pilot.public-honcho",
+    }
+    supervisor_python = Path(settings["server_root"]) / ".venv" / "bin" / "python"
+    supervisor_python.parent.mkdir(parents=True)
+    supervisor_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    supervisor_python.chmod(0o700)
+    uv = tmp_path / "uv"
+    uv.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    uv.chmod(0o700)
+    label = settings["supervisor_label"]
+    target = home / "Library" / "LaunchAgents" / f"{label}.plist"
+    stop_calls: list[tuple[Path, Path, dict[str, str]]] = []
+    record = mock.Mock()
+
+    def stop_services(manifest_arg, runtime_arg, services):
+        stop_calls.append(
+            (
+                Path(manifest_arg),
+                Path(runtime_arg),
+                dict(services),
+            )
+        )
+        if len(stop_calls) == 2:
+            assert target.is_file(), "cleanup must follow the partial plist write"
+            target.unlink()
+        return {"stopped": sorted(services.values())}
+
+    transaction = mock.MagicMock()
+    transaction.__enter__.return_value = 9
+    fake_registry = SimpleNamespace(
+        lifecycle_lock=lambda: transaction,
+        canonical_manifest_path=lambda path: Path(path).resolve(),
+        _stop_services_unlocked=stop_services,
+        _record_services_unlocked=record,
+    )
+
+    def fake_run(command, **_kwargs):
+        if "bootstrap" in command:
+            raise service.subprocess.CalledProcessError(5, command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(service, "service_registry", fake_registry, raising=False)
+    monkeypatch.setattr(service, "_load_manifest", lambda _path: (manifest, settings))
+    monkeypatch.setattr(
+        service,
+        "provision_public_service",
+        lambda _path: {"provisioned": True},
+    )
+    monkeypatch.setattr(service, "_supervisor_python_path", lambda _settings: supervisor_python)
+    monkeypatch.setattr(service.shutil, "which", lambda _command: str(uv))
+    monkeypatch.setattr(service.subprocess, "run", fake_run)
+
+    with pytest.raises(service.subprocess.CalledProcessError):
+        service.install_public_service(manifest_path)
+
+    expected_service = {"public_honcho": label}
+    assert stop_calls == [
+        (manifest_path.resolve(), runtime.resolve(), expected_service),
+        (manifest_path.resolve(), runtime.resolve(), expected_service),
+    ]
+    record.assert_not_called()
+    assert not target.exists()
+    transaction.__enter__.assert_called_once_with()
+    transaction.__exit__.assert_called_once()
+
+
+def test_successful_install_records_stable_owner_and_supervises_runtime_manifest(
+    tmp_path, monkeypatch
+):
+    import john_lomein_public_honcho_service as service
+
+    runtime = tmp_path / "runtime"
+    runtime_manifest = runtime / "instance.yaml"
+    runtime_manifest.parent.mkdir(parents=True)
+    runtime_manifest.write_text("instance:\n  slug: public-pilot\n", encoding="utf-8")
+    source_manifest = tmp_path / "source" / "instance.yaml"
+    source_manifest.parent.mkdir()
+    source_manifest.write_text("instance:\n  slug: public-pilot\n", encoding="utf-8")
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    manifest = dedicated_manifest(runtime)
+    settings = {
+        "supervisor_label": "ai.john-lomein.public-pilot.public-honcho",
+        "base_url": "http://127.0.0.1:19453",
+    }
+    python = tmp_path / "server" / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("#!/bin/sh\n", encoding="utf-8")
+    python.chmod(0o700)
+    uv = tmp_path / "bin" / "uv"
+    uv.parent.mkdir()
+    uv.write_text("#!/bin/sh\n", encoding="utf-8")
+    uv.chmod(0o700)
+    transaction = mock.MagicMock()
+    transaction.__enter__.return_value = 9
+    stop = mock.Mock(return_value={"stopped": []})
+    target = (
+        home
+        / "Library"
+        / "LaunchAgents"
+        / f"{settings['supervisor_label']}.plist"
+    )
+
+    def record_owner(manifest_path, runtime_home, services):
+        assert target.is_file()
+        return {"manifest": str(manifest_path), "labels": services}
+
+    record = mock.Mock(side_effect=record_owner)
+    fake_registry = SimpleNamespace(
+        lifecycle_lock=lambda: transaction,
+        canonical_manifest_path=lambda path: Path(path).resolve(),
+        _stop_services_unlocked=stop,
+        _record_services_unlocked=record,
+    )
+    monkeypatch.setattr(service, "service_registry", fake_registry, raising=False)
+    monkeypatch.setattr(service, "_load_manifest", lambda _path: (manifest, settings))
+    monkeypatch.setattr(
+        service,
+        "provision_public_service",
+        lambda _path: {"base_url": settings["base_url"]},
+    )
+    monkeypatch.setattr(service, "_supervisor_python_path", lambda _settings: python)
+    monkeypatch.setattr(service.shutil, "which", lambda name: str(uv) if name == "uv" else None)
+    def fake_successful_run(command, **_kwargs):
+        if "bootstrap" in command:
+            service._write_status(runtime, state="running", health={})
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(service.subprocess, "run", fake_successful_run)
+    monkeypatch.setattr(service, "api_health", lambda _base_url: True)
+
+    result = service.install_public_service(source_manifest)
+
+    record.assert_called_once_with(
+        source_manifest.resolve(),
+        runtime.resolve(),
+        {"public_honcho": settings["supervisor_label"]},
+    )
+    decoded = plistlib.loads(target.read_bytes())
+    assert decoded["ProgramArguments"][-1] == str(runtime_manifest.resolve())
+    assert result["installed"] is True
+    transaction.__enter__.assert_called_once_with()
+    transaction.__exit__.assert_called_once()
+
+
+def test_disable_reconciliation_uninstalls_current_public_service(tmp_path, monkeypatch):
+    import john_lomein_public_honcho_service as service
+
+    runtime = tmp_path / "runtime"
+    manifest_path = tmp_path / "instance.yaml"
+    manifest_path.write_text("instance:\n  slug: public-pilot\n", encoding="utf-8")
+    manifest = dedicated_manifest(runtime)
+    settings = {
+        "supervisor_label": "ai.john-lomein.public-pilot.public-honcho",
+    }
+    stop = mock.Mock(return_value={"stopped": [settings["supervisor_label"]]})
+    transaction = mock.MagicMock()
+    transaction.__enter__.return_value = 9
+    fake_registry = SimpleNamespace(
+        lifecycle_lock=lambda: transaction,
+        canonical_manifest_path=lambda path: Path(path).resolve(),
+        _stop_services_unlocked=stop,
+    )
+    monkeypatch.setattr(service, "service_registry", fake_registry, raising=False)
+    monkeypatch.setattr(service, "_load_manifest", lambda _path: (manifest, settings))
+    monkeypatch.setattr(service, "_load_manifest_payload", lambda _path: manifest)
+
+    result = service.uninstall_public_service(manifest_path)
+
+    stop.assert_called_once_with(
+        manifest_path.resolve(),
+        runtime.resolve(),
+        {"public_honcho": settings["supervisor_label"]},
+    )
+    assert result == {
+        "installed": False,
+        "label": settings["supervisor_label"],
+        "stopped": [settings["supervisor_label"]],
+    }
+    transaction.__enter__.assert_called_once_with()
+    transaction.__exit__.assert_called_once()
 
 
 def test_runtime_configuration_is_dedicated_local_and_redis_is_nonpersistent(tmp_path):
@@ -295,7 +502,7 @@ def test_retention_receipt_is_required_fresh_and_exactly_five_minute_policy(tmp_
 
 
 def _exact_tombstone(state: str) -> dict:
-    from john_lomein_honcho_pilot import sha256_json
+    from john_lomein_honcho_pilot import DELETION_TOMBSTONE_SCHEMA, sha256_json
 
     exact_ids = {
         "peer_ids": ["peer-id"],
@@ -304,10 +511,20 @@ def _exact_tombstone(state: str) -> dict:
         "session_peer_link_keys": ["session|participant"],
         "message_ids": [1],
         "message_public_ids": ["message-public"],
+        "message_identities": [
+            {"id": 1, "public_id": "message-public", "fingerprint": "sha256:" + "1" * 64}
+        ],
         "embedding_ids": [2],
+        "embedding_identities": [
+            {"id": 2, "message_id": "message-public", "fingerprint": "sha256:" + "2" * 64}
+        ],
         "document_ids": ["document-id"],
         "collection_ids": ["collection-id"],
         "queue_ids": [3],
+        "queue_identities": [
+            {"id": 3, "work_unit_key": "work-unit", "fingerprint": "sha256:" + "3" * 64}
+        ],
+        "sequence_high_waters": [],
         "work_unit_keys": ["work-unit"],
         "active_queue_session_ids": ["active-id"],
         "active_work_unit_keys": ["work-unit"],
@@ -316,7 +533,7 @@ def _exact_tombstone(state: str) -> dict:
         "malformed_lineage_ids": [],
     }
     body = {
-        "schema_version": "john-lomein.honcho-deletion-tombstone.v2",
+        "schema_version": DELETION_TOMBSTONE_SCHEMA,
         "operation": "participant_deletion",
         "state": state,
         "plan_digest": "a" * 64,
@@ -494,11 +711,14 @@ def test_deploy_and_doctor_reference_only_the_public_supervisor_boundary():
     doctor = (SCRIPTS / "doctor-instance.py").read_text(encoding="utf-8")
 
     assert "public-service-install" in deploy
+    assert "public-service-uninstall" in deploy
+    assert '--manifest "$JL_INSTANCE_MANIFEST_INPUT"' in deploy
     assert "every 24h" not in deploy
     assert "install-startup-gates" not in deploy
     assert "ai.hermes.honcho.api" not in deploy
     assert "ai.hermes.honcho.deriver" not in deploy
     assert "Public Honcho supervisor" in doctor
+    assert "expected_services['public_honcho']=supervisor_label" in doctor
     assert "Honcho API/deriver startup gate" not in doctor
 
 
@@ -513,6 +733,67 @@ def test_public_service_assets_never_name_or_control_personal_launchagents():
         text = asset.read_text(encoding="utf-8")
         for label in forbidden:
             assert label not in text
+
+
+def test_runtime_uninstall_requests_public_service_without_touching_personal_honcho(
+    tmp_path,
+):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    uv_log = tmp_path / "uv.log"
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$UV_LOG"
+case "$*" in
+  *read-instance-env.py*)
+    printf 'export BOT_SLUG=%q\\n' "$TEST_SLUG"
+    printf 'export BOT_HERMES_HOME=%q\\n' "$TEST_RUNTIME"
+    printf 'export JL_INSTANCE_MANIFEST=%q\\n' "$TEST_MANIFEST"
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_uv.chmod(0o700)
+    runtime = tmp_path / "runtime"
+    manifest = tmp_path / "instance.yaml"
+    instance = tmp_path / "instance"
+    env = os.environ.copy()
+    env.update(
+        {
+            "HOME": str(tmp_path / "home"),
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "JOHN_LOMEIN_SERVICE_LOCK_FD": "9",
+            "TEST_MANIFEST": str(manifest),
+            "TEST_RUNTIME": str(runtime),
+            "TEST_SLUG": "disabled-slug",
+            "UV_LOG": str(uv_log),
+        }
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(SCRIPTS / "uninstall-runtime-supervisor.sh"),
+            str(instance),
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
+    invocations = uv_log.read_text(encoding="utf-8")
+    assert (
+        "public_honcho=ai.john-lomein.disabled-slug.public-honcho"
+        in invocations
+    )
+    assert "ai.hermes.honcho." not in invocations
+    assert "ai.john-lomein.disabled-slug.public-honcho" in result.stdout
 
 
 def test_tombstone_files_are_private(tmp_path):
@@ -540,10 +821,20 @@ def test_crash_injection_never_advances_pending_before_database_and_cache_verify
             "session_peer_link_keys": ["session|participant"],
             "message_ids": [1],
             "message_public_ids": ["message-public"],
+            "message_identities": [
+                {"id": 1, "public_id": "message-public", "fingerprint": "sha256:" + "1" * 64}
+            ],
             "embedding_ids": [2],
+            "embedding_identities": [
+                {"id": 2, "message_id": "message-public", "fingerprint": "sha256:" + "2" * 64}
+            ],
             "document_ids": ["document-id"],
             "collection_ids": ["collection-id"],
             "queue_ids": [3],
+            "queue_identities": [
+                {"id": 3, "work_unit_key": "work-unit", "fingerprint": "sha256:" + "3" * 64}
+            ],
+            "sequence_high_waters": [],
             "work_unit_keys": ["work-unit"],
             "active_queue_session_ids": ["active-id"],
             "active_work_unit_keys": ["work-unit"],
@@ -594,7 +885,7 @@ def test_crash_injection_never_advances_pending_before_database_and_cache_verify
     )
     monkeypatch.setattr(
         pilot,
-        "verified_backup_metadata",
+        "verified_deletion_backup_for_plan",
         lambda *_a, **_k: {
             "path": "/private/public.dump",
             "sha256": "sha256:" + "b" * 64,

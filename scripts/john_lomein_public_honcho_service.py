@@ -31,6 +31,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+import john_lomein_service_registry as service_registry
 from john_lomein_honcho_contract import honcho_settings
 from john_lomein_honcho_pilot import (
     api_health,
@@ -102,6 +103,7 @@ def build_supervisor_plist(
         ],
         "WorkingDirectory": str(runtime),
         "EnvironmentVariables": {
+            "JOHN_LOMEIN_INSTANCE_HERMES_HOME": str(runtime),
             "JOHN_LOMEIN_UV": str(uv),
             "PYTHONUNBUFFERED": "1",
             "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
@@ -320,7 +322,7 @@ def _retention_cutoff_bounded(
     )
 
 
-def _load_manifest(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+def _load_manifest_payload(path: Path) -> dict[str, Any]:
     raw = Path(path).expanduser()
     if not raw.is_absolute() or raw.is_symlink() or not raw.is_file():
         raise ValueError("instance manifest is missing or unsafe")
@@ -332,6 +334,11 @@ def _load_manifest(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     if not isinstance(payload, dict):
         raise ValueError("instance manifest is invalid")
     validate_manifest_contract(payload)
+    return payload
+
+
+def _load_manifest(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    payload = _load_manifest_payload(path)
     slug = str((payload.get("instance") or {}).get("slug") or "")
     return payload, honcho_settings(payload, instance_slug=slug)
 
@@ -571,15 +578,50 @@ def _supervisor_python_path(settings: Mapping[str, Any]) -> Path:
     return interpreter
 
 
-def install_public_service(manifest_path: Path) -> dict[str, Any]:
-    manifest_path = Path(manifest_path).expanduser().resolve()
-    manifest, settings = _load_manifest(manifest_path)
-    provision = provision_public_service(manifest_path)
+def _public_service_coordinates(
+    manifest_path: Path,
+) -> tuple[Path, dict[str, Any], dict[str, Any], Path, str]:
+    candidate = Path(manifest_path).expanduser()
+    if not candidate.is_absolute():
+        raise ValueError("instance manifest path must be absolute")
+    manifest, settings = _load_manifest(candidate)
     runtime_value = str((manifest.get("runtime") or {}).get("hermes_home") or "")
     if not runtime_value or not Path(runtime_value).expanduser().is_absolute():
         raise ValueError("instance runtime home is invalid")
     runtime = Path(runtime_value).expanduser().resolve()
     slug = str((manifest.get("instance") or {}).get("slug") or "")
+    label = str(settings["supervisor_label"])
+    if label != public_supervisor_label(slug):
+        raise ValueError("public Honcho supervisor label is not product-owned")
+    registry_manifest = service_registry.canonical_manifest_path(candidate)
+    return registry_manifest, manifest, settings, runtime, label
+
+
+def _runtime_service_manifest(runtime: Path, expected_slug: str) -> Path:
+    runtime_manifest = runtime / "instance.yaml"
+    payload, _settings = _load_manifest(runtime_manifest)
+    runtime_value = str((payload.get("runtime") or {}).get("hermes_home") or "")
+    runtime_slug = str((payload.get("instance") or {}).get("slug") or "")
+    if (
+        not runtime_value
+        or Path(runtime_value).expanduser().resolve() != runtime
+        or runtime_slug != expected_slug
+    ):
+        raise ValueError("deployed instance manifest does not match public service owner")
+    return runtime_manifest.resolve()
+
+
+def _perform_public_service_install(
+    manifest_path: Path,
+    registry_manifest: Path,
+    manifest: dict[str, Any],
+    settings: dict[str, Any],
+    runtime: Path,
+    label: str,
+) -> dict[str, Any]:
+    provision = provision_public_service(manifest_path)
+    slug = str((manifest.get("instance") or {}).get("slug") or "")
+    service_manifest = _runtime_service_manifest(runtime, slug)
     script = runtime / "scripts" / Path(__file__).name
     supervisor_python = _supervisor_python_path(settings)
     uv_value = shutil.which("uv")
@@ -589,26 +631,16 @@ def install_public_service(manifest_path: Path) -> dict[str, Any]:
     if not uv_binary.is_file() or not os.access(uv_binary, os.X_OK):
         raise ValueError("public Honcho supervisor uv is invalid")
     plist = build_supervisor_plist(
-        manifest_path=manifest_path,
+        manifest_path=service_manifest,
         runtime_home=runtime,
         instance_slug=slug,
         python=str(supervisor_python),
         uv=str(uv_binary),
         supervisor_script=script,
     )
-    label = str(settings["supervisor_label"])
-    if not label.startswith(SUPERVISOR_LABEL_PREFIX):
-        raise ValueError("public Honcho supervisor label is not product-owned")
     agents = Path.home() / "Library" / "LaunchAgents"
     target = agents / f"{label}.plist"
     domain = f"gui/{os.getuid()}"
-    subprocess.run(
-        ["/bin/launchctl", "bootout", domain, str(target)],
-        check=False,
-        timeout=30,
-        capture_output=True,
-        text=True,
-    )
     _atomic_bytes(target, plistlib.dumps(plist, sort_keys=True), mode=0o600)
     if plistlib.loads(target.read_bytes()) != plist:
         raise RuntimeError("public Honcho supervisor plist verification failed")
@@ -632,7 +664,78 @@ def install_public_service(manifest_path: Path) -> dict[str, Any]:
         time.sleep(0.25)
     else:
         raise RuntimeError("public Honcho supervisor did not become healthy")
-    return {"installed": True, "label": label, "plist": str(target), "provision": provision}
+    service_registry._record_services_unlocked(
+        registry_manifest,
+        runtime,
+        {"public_honcho": label},
+    )
+    return {
+        "installed": True,
+        "label": label,
+        "plist": str(target),
+        "provision": provision,
+    }
+
+
+def install_public_service(manifest_path: Path) -> dict[str, Any]:
+    candidate = Path(manifest_path).expanduser()
+    with service_registry.lifecycle_lock():
+        registry_manifest, manifest, settings, runtime, label = (
+            _public_service_coordinates(candidate)
+        )
+        services = {"public_honcho": label}
+        service_registry._stop_services_unlocked(
+            registry_manifest,
+            runtime,
+            services,
+        )
+        try:
+            return _perform_public_service_install(
+                candidate,
+                registry_manifest,
+                manifest,
+                settings,
+                runtime,
+                label,
+            )
+        except BaseException as install_error:
+            try:
+                service_registry._stop_services_unlocked(
+                    registry_manifest,
+                    runtime,
+                    services,
+                )
+            except BaseException as cleanup_error:
+                raise RuntimeError(
+                    "public Honcho install failed and service cleanup could not be verified "
+                    f"({type(install_error).__name__}; {type(cleanup_error).__name__})"
+                ) from cleanup_error
+            raise
+
+
+def uninstall_public_service(manifest_path: Path) -> dict[str, Any]:
+    candidate = Path(manifest_path).expanduser()
+    if not candidate.is_absolute():
+        raise ValueError("instance manifest path must be absolute")
+    with service_registry.lifecycle_lock():
+        manifest = _load_manifest_payload(candidate)
+        runtime_value = str((manifest.get("runtime") or {}).get("hermes_home") or "")
+        if not runtime_value or not Path(runtime_value).expanduser().is_absolute():
+            raise ValueError("instance runtime home is invalid")
+        runtime = Path(runtime_value).expanduser().resolve()
+        slug = str((manifest.get("instance") or {}).get("slug") or "")
+        label = public_supervisor_label(slug)
+        registry_manifest = service_registry.canonical_manifest_path(candidate)
+        result = service_registry._stop_services_unlocked(
+            registry_manifest,
+            runtime,
+            {"public_honcho": label},
+        )
+    return {
+        "installed": False,
+        "label": label,
+        "stopped": list(result["stopped"]),
+    }
 
 
 def _stop_children(children: Sequence[subprocess.Popen[Any]]) -> None:
@@ -831,6 +934,15 @@ def supervise_public_service(manifest_path: Path) -> int:
                 if pause_path.exists() or pause_path.is_symlink():
                     raise RuntimeError("public Honcho pause requested")
                 if any(child.poll() is not None for child in service_children):
+                    if stopping:
+                        break
+                    # launchd bootout may terminate children just before the
+                    # supervisor receives its own SIGTERM. Allow that bounded
+                    # signal-ordering window before treating an exit as a
+                    # privacy failure.
+                    time.sleep(0.25)
+                    if stopping:
+                        break
                     raise RuntimeError("public Honcho child exited")
                 time.sleep(1)
             if not stopping:
@@ -890,7 +1002,12 @@ def supervise_public_service(manifest_path: Path) -> int:
 def parser() -> argparse.ArgumentParser:
     out = argparse.ArgumentParser(description=__doc__)
     sub = out.add_subparsers(dest="command", required=True)
-    for name in ("public-service-provision", "public-service-install", "supervise"):
+    for name in (
+        "public-service-provision",
+        "public-service-install",
+        "public-service-uninstall",
+        "supervise",
+    ):
         command = sub.add_parser(name)
         command.add_argument("--manifest", required=True)
     return out
@@ -903,6 +1020,8 @@ def main() -> int:
             result = provision_public_service(Path(args.manifest))
         elif args.command == "public-service-install":
             result = install_public_service(Path(args.manifest))
+        elif args.command == "public-service-uninstall":
+            result = uninstall_public_service(Path(args.manifest))
         else:
             return supervise_public_service(Path(args.manifest))
     except Exception as exc:

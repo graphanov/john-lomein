@@ -32,14 +32,14 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 PAUSE_SCHEMA = "john-lomein.honcho-pause.v1"
-RETENTION_SCHEMA = "john-lomein.honcho-retention-plan.v2"
-BACKUP_SCHEMA = "john-lomein.honcho-backup.v1"
-DELETION_SCHEMA = "john-lomein.honcho-participant-deletion-plan.v2"
+RETENTION_SCHEMA = "john-lomein.honcho-retention-plan.v3"
+BACKUP_SCHEMA = "john-lomein.honcho-backup.v2"
+DELETION_SCHEMA = "john-lomein.honcho-participant-deletion-plan.v3"
 RECOVERY_SCHEMA = "john-lomein.honcho-embedding-recovery-plan.v1"
-DELETION_TOMBSTONE_SCHEMA = "john-lomein.honcho-deletion-tombstone.v2"
-RETENTION_TOMBSTONE_SCHEMA = "john-lomein.honcho-retention-tombstone.v2"
-RETENTION_BACKUP_COVERAGE_SCHEMA = (
-    "john-lomein.honcho-retention-backup-coverage.v1"
+DELETION_TOMBSTONE_SCHEMA = "john-lomein.honcho-deletion-tombstone.v3"
+RETENTION_TOMBSTONE_SCHEMA = "john-lomein.honcho-retention-tombstone.v3"
+DELETION_BACKUP_COVERAGE_SCHEMA = (
+    "john-lomein.honcho-deletion-backup-coverage.v1"
 )
 PUBLIC_BACKUP_MAX_COUNT = 32
 PUBLIC_BACKUP_MAX_BYTES = 64 * 1024 * 1024 * 1024
@@ -48,25 +48,32 @@ SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 SCRIPT_DIR = Path(__file__).resolve().parent
 PARTICIPANT_CANDIDATE_SQL = SCRIPT_DIR / "honcho-participant-candidates.sql"
 RETENTION_CANDIDATE_SQL = SCRIPT_DIR / "honcho-retention-candidates.sql"
+BIGINT_IDENTITY_KEYS = frozenset({
+    "message_identities", "embedding_identities", "queue_identities",
+})
+SEQUENCE_HIGH_WATER_KEY = "sequence_high_waters"
 DELETION_CANDIDATE_KEYS = frozenset({
     "peer_ids", "session_ids", "session_names", "session_peer_link_keys",
-    "message_ids", "message_public_ids", "embedding_ids", "document_ids",
-    "collection_ids", "queue_ids", "work_unit_keys", "active_work_unit_keys",
-    "active_queue_session_ids",
+    "message_ids", "message_public_ids", "message_identities",
+    "embedding_ids", "embedding_identities", "document_ids",
+    "collection_ids", "queue_ids", "queue_identities", "work_unit_keys",
+    "active_work_unit_keys", "active_queue_session_ids",
     "conflicting_peers", "unknown_touching_queue_ids", "malformed_lineage_ids",
+    "sequence_high_waters",
 })
 RETENTION_CANDIDATE_KEYS = frozenset({
-    "message_ids", "message_public_ids", "embedding_ids", "document_ids",
-    "queue_ids", "work_unit_keys", "active_work_unit_keys",
-    "active_queue_session_ids",
-    "mixed_work_unit_keys", "unknown_touching_queue_ids",
-    "malformed_lineage_ids",
+    "message_ids", "message_public_ids", "message_identities",
+    "embedding_ids", "embedding_identities", "document_ids",
+    "queue_ids", "queue_identities", "work_unit_keys", "active_work_unit_keys",
+    "active_queue_session_ids", "mixed_work_unit_keys", "unknown_touching_queue_ids",
+    "malformed_lineage_ids", "sequence_high_waters",
 })
 PLAN_FIELDS = (
     "database_oid",
     "workspace",
     "cutoff",
     "retention_days",
+    "generated_at",
     "message_count",
     "queue_count",
     "embedding_count",
@@ -83,8 +90,105 @@ def sha256_json(value: object) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
+def _candidate_sort_key(value: object) -> tuple[str, object]:
+    if type(value) in {int, float, str}:
+        return (type(value).__name__, value)
+    return (type(value).__name__, canonical_json(value))
+
+
+def _normalize_candidate_sets(
+    raw: Mapping[str, Any], expected_keys: Sequence[str] | frozenset[str]
+) -> dict[str, list[Any]]:
+    expected = set(expected_keys)
+    if not isinstance(raw, Mapping) or set(raw) != expected:
+        raise ValueError("deletion candidate payload is invalid")
+    normalized: dict[str, list[Any]] = {}
+    for key in sorted(expected):
+        value = raw[key]
+        if not isinstance(value, list):
+            raise ValueError("deletion candidate set is invalid")
+        unique = {canonical_json(item): item for item in value}
+        normalized[key] = sorted(unique.values(), key=_candidate_sort_key)
+    _validate_candidate_safety_bindings(normalized)
+    return normalized
+
+
+def _validate_candidate_safety_bindings(candidates: Mapping[str, Sequence[Any]]) -> None:
+    identity_specs = (
+        ("message_ids", "message_identities", "public_id"),
+        ("embedding_ids", "embedding_identities", "message_id"),
+        ("queue_ids", "queue_identities", "work_unit_key"),
+    )
+    fingerprint_re = re.compile(r"^sha256:[0-9a-f]{64}$")
+    for id_key, identity_key, relation_key in identity_specs:
+        ids = candidates.get(id_key)
+        bindings = candidates.get(identity_key)
+        if not isinstance(ids, Sequence) or isinstance(ids, (str, bytes)):
+            raise ValueError(f"{id_key} must be a candidate list")
+        if not isinstance(bindings, Sequence) or isinstance(bindings, (str, bytes)):
+            raise ValueError(f"{identity_key} must be a candidate list")
+        binding_ids: list[int] = []
+        for binding in bindings:
+            if not isinstance(binding, Mapping) or set(binding) != {
+                "id", relation_key, "fingerprint"
+            }:
+                raise ValueError(f"{identity_key} contains an invalid identity binding")
+            row_id = binding.get("id")
+            relation_id = binding.get(relation_key)
+            if type(row_id) is not int or row_id < 0:
+                raise ValueError(f"{identity_key} contains an invalid bigint id")
+            if not isinstance(relation_id, str) or not relation_id:
+                raise ValueError(f"{identity_key} contains an invalid relational identity")
+            if not isinstance(binding.get("fingerprint"), str) or not fingerprint_re.fullmatch(
+                str(binding["fingerprint"])
+            ):
+                raise ValueError(f"{identity_key} contains an invalid row fingerprint")
+            binding_ids.append(row_id)
+        if sorted(binding_ids) != sorted(ids) or len(binding_ids) != len(set(binding_ids)):
+            raise ValueError(f"{identity_key} does not bind the exact bigint id set")
+
+    message_public_ids = candidates.get("message_public_ids")
+    bound_public_ids = [
+        binding["public_id"] for binding in candidates.get("message_identities", [])
+    ]
+    if sorted(bound_public_ids) != sorted(message_public_ids or []):
+        raise ValueError("message identities do not bind the exact public-id set")
+
+    marks = candidates.get(SEQUENCE_HIGH_WATER_KEY)
+    if not isinstance(marks, Sequence) or isinstance(marks, (str, bytes)):
+        raise ValueError("sequence high-water metadata is missing")
+    expected_tables = {
+        "messages": "message_ids",
+        "message_embeddings": "embedding_ids",
+        "queue": "queue_ids",
+    }
+    seen: set[str] = set()
+    sequence_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$")
+    for mark in marks:
+        if not isinstance(mark, Mapping) or set(mark) != {
+            "table", "column", "sequence", "high_water"
+        }:
+            raise ValueError("sequence high-water metadata is invalid")
+        table = mark.get("table")
+        sequence = mark.get("sequence")
+        high_water = mark.get("high_water")
+        if table not in expected_tables or table in seen or mark.get("column") != "id":
+            raise ValueError("sequence high-water relation is invalid")
+        if not isinstance(sequence, str) or sequence_re.fullmatch(sequence) is None:
+            raise ValueError("sequence high-water sequence is invalid")
+        if type(high_water) is not int or high_water < 0:
+            raise ValueError("sequence high-water value is invalid")
+        ids = candidates.get(expected_tables[str(table)], [])
+        if ids and high_water < max(int(item) for item in ids):
+            raise ValueError("sequence high-water is below a candidate bigint id")
+        seen.add(str(table))
+    # Some supported Honcho schemas use caller-assigned bigint IDs rather than
+    # owned sequences. Fingerprint bindings still block reused-ID deletion; a
+    # high-water mark is required and replayed for every sequence that exists.
+
+
 def utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def strict_nonnegative_int(value: object, field: str) -> int:
@@ -156,18 +260,17 @@ def make_retention_plan(
         raise ValueError("cutoff must be an ISO-8601 timestamp") from exc
     if parsed_cutoff.tzinfo is None:
         raise ValueError("cutoff must include a timezone")
+    generated_at = str(values["generated_at"] or "").strip()
+    try:
+        parsed_generated_at = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("generated_at must be an ISO-8601 timestamp") from exc
+    if parsed_generated_at.tzinfo is None:
+        raise ValueError("generated_at must include a timezone")
     schema_fingerprint = str(values["schema_fingerprint"] or "")
     if not re.fullmatch(r"[0-9a-f]{64}", schema_fingerprint):
         raise ValueError("schema_fingerprint must be sha256 hex")
-    if set(candidate_sets) != set(RETENTION_CANDIDATE_KEYS):
-        raise ValueError("retention candidate sets are incomplete")
-    normalized_sets = {
-        key: sorted(
-            set(candidate_sets[key]),
-            key=lambda item: (str(type(item)), str(item)),
-        )
-        for key in sorted(RETENTION_CANDIDATE_KEYS)
-    }
+    normalized_sets = _normalize_candidate_sets(candidate_sets, RETENTION_CANDIDATE_KEYS)
     if normalized_sets["mixed_work_unit_keys"]:
         raise ValueError("retention is blocked by mixed-age work units")
     if normalized_sets["unknown_touching_queue_ids"]:
@@ -200,6 +303,9 @@ def make_retention_plan(
         .isoformat()
         .replace("+00:00", "Z"),
         "retention_days": retention_days,
+        "generated_at": parsed_generated_at.astimezone(timezone.utc)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z"),
         "message_count": len(normalized_sets["message_ids"]),
         "queue_count": len(normalized_sets["queue_ids"]),
         "embedding_count": len(normalized_sets["embedding_ids"]),
@@ -257,9 +363,12 @@ def validate_retention_plan(plan: Mapping[str, Any]) -> bool:
         cutoff = datetime.fromisoformat(
             str(plan.get("cutoff") or "").replace("Z", "+00:00")
         )
+        generated_at = datetime.fromisoformat(
+            str(plan.get("generated_at") or "").replace("Z", "+00:00")
+        )
     except ValueError:
         return False
-    if cutoff.tzinfo is None:
+    if cutoff.tzinfo is None or generated_at.tzinfo is None:
         return False
     if plan.get("authority") != {
         "can_delete_raw_public_messages": True,
@@ -285,9 +394,7 @@ def make_participant_deletion_plan(
 ) -> dict[str, Any]:
     if not SAFE_NAME_RE.fullmatch(workspace or "") or not SAFE_NAME_RE.fullmatch(peer or ""):
         raise ValueError("workspace and peer must be safe Honcho names")
-    if set(candidate_sets) != set(DELETION_CANDIDATE_KEYS):
-        raise ValueError("participant deletion candidate sets are incomplete")
-    normalized_sets = {key: list(candidate_sets[key]) for key in sorted(DELETION_CANDIDATE_KEYS)}
+    normalized_sets = _normalize_candidate_sets(candidate_sets, DELETION_CANDIDATE_KEYS)
     service_peers = sorted({str(item).strip() for item in allowed_service_peers if str(item).strip()})
     if any(SAFE_NAME_RE.fullmatch(name) is None for name in service_peers) or peer in service_peers:
         raise ValueError("allowed service peer registry is invalid")
@@ -296,13 +403,30 @@ def make_participant_deletion_plan(
     for blocker in ("conflicting_peers", "unknown_touching_queue_ids", "malformed_lineage_ids"):
         if normalized_sets[blocker]:
             raise ValueError(f"participant deletion is blocked by {blocker}")
-    counts = {key.removesuffix("_ids").removesuffix("_keys") + "_count": len(value) for key, value in normalized_sets.items() if key not in {"conflicting_peers", "unknown_touching_queue_ids", "malformed_lineage_ids", "message_public_ids", "session_names"}}
+    non_count_keys = {
+        "conflicting_peers", "unknown_touching_queue_ids", "malformed_lineage_ids",
+        "message_public_ids", "session_names", *BIGINT_IDENTITY_KEYS,
+        SEQUENCE_HIGH_WATER_KEY,
+    }
+    counts = {
+        key.removesuffix("_ids").removesuffix("_keys") + "_count": len(value)
+        for key, value in normalized_sets.items()
+        if key not in non_count_keys
+    }
     id_set_digests = {key: sha256_json(value) for key, value in normalized_sets.items()}
     if re.fullmatch(r"sha256:[0-9a-f]{64}", schema_fingerprint or "") is None:
         raise ValueError("participant deletion schema fingerprint is invalid")
+    try:
+        parsed_generated_at = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("participant deletion generated_at is invalid") from exc
+    if parsed_generated_at.tzinfo is None:
+        raise ValueError("participant deletion generated_at must include a timezone")
     payload = {
         "schema_version": DELETION_SCHEMA,
-        "generated_at": generated_at,
+        "generated_at": parsed_generated_at.astimezone(timezone.utc)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z"),
         "database_oid": strict_nonnegative_int(database_oid, "database_oid"),
         "workspace": workspace,
         "peer": peer,
@@ -341,6 +465,27 @@ def validate_participant_deletion_plan(plan: Mapping[str, Any]) -> bool:
     }:
         return False
     if set(plan.get("id_set_digests") or {}) != set(DELETION_CANDIDATE_KEYS):
+        return False
+    if re.fullmatch(r"[0-9a-f]{64}", str(plan.get("candidate_sets_digest") or "")) is None:
+        return False
+    if any(
+        re.fullmatch(r"[0-9a-f]{64}", str(value or "")) is None
+        for value in (plan.get("id_set_digests") or {}).values()
+    ):
+        return False
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", str(plan.get("schema_fingerprint") or "")) is None:
+        return False
+    if SAFE_NAME_RE.fullmatch(str(plan.get("workspace") or "")) is None or SAFE_NAME_RE.fullmatch(
+        str(plan.get("peer") or "")
+    ) is None:
+        return False
+    try:
+        generated_at = datetime.fromisoformat(
+            str(plan.get("generated_at") or "").replace("Z", "+00:00")
+        )
+    except ValueError:
+        return False
+    if generated_at.tzinfo is None:
         return False
     unsigned = dict(plan)
     digest = unsigned.pop("plan_digest", "")
@@ -434,12 +579,14 @@ def _load_tombstone_records(directory: Path) -> list[dict[str, Any]]:
             if operation == "participant_deletion"
             else RETENTION_CANDIDATE_KEYS
         )
-        if (
-            not isinstance(exact_ids, Mapping)
-            or set(exact_ids) != set(expected_keys)
-            or any(not isinstance(value, list) for value in exact_ids.values())
-        ):
-            raise ValueError("deletion tombstone exact ID sets are invalid")
+        try:
+            exact_ids = _normalize_candidate_sets(
+                data.get("exact_candidate_ids"), expected_keys
+            )
+        except ValueError as exc:
+            raise ValueError("deletion tombstone exact candidate sets are invalid") from exc
+        if exact_ids != data.get("exact_candidate_ids"):
+            raise ValueError("deletion tombstone exact candidate sets are not canonical")
         if sha256_json(exact_ids) != data.get("candidate_sets_digest"):
             raise ValueError("deletion tombstone exact candidate digest is invalid")
         id_set_digests = data.get("id_set_digests")
@@ -516,20 +663,30 @@ def exact_tombstone_residue(
 ) -> dict[str, list[Any]]:
     if SAFE_NAME_RE.fullmatch(workspace or "") is None:
         raise ValueError("tombstone residue workspace is invalid")
+    if set(exact_ids) == set(DELETION_CANDIDATE_KEYS):
+        expected_keys = DELETION_CANDIDATE_KEYS
+    elif set(exact_ids) == set(RETENTION_CANDIDATE_KEYS):
+        expected_keys = RETENTION_CANDIDATE_KEYS
+    else:
+        raise ValueError("tombstone exact candidate sets are incomplete")
+    normalized = _normalize_candidate_sets(exact_ids, expected_keys)
     variables = {
-        key: canonical_json(list(exact_ids.get(key) or []))
+        key: canonical_json(list(normalized.get(key) or []))
         for key in (
             "peer_ids",
             "session_ids",
             "session_names",
             "session_peer_link_keys",
             "message_ids",
-            "message_public_ids",
+            "message_identities",
             "embedding_ids",
+            "embedding_identities",
             "document_ids",
             "collection_ids",
             "queue_ids",
+            "queue_identities",
             "active_queue_session_ids",
+            "sequence_high_waters",
         )
     }
     variables["workspace"] = workspace
@@ -540,12 +697,37 @@ session_ids(id) AS (SELECT value FROM jsonb_array_elements_text(:'session_ids'::
 session_names(name) AS (SELECT value FROM jsonb_array_elements_text(:'session_names'::jsonb)),
 session_links(link_key) AS (SELECT value FROM jsonb_array_elements_text(:'session_peer_link_keys'::jsonb)),
 message_ids(id) AS (SELECT value::bigint FROM jsonb_array_elements_text(:'message_ids'::jsonb)),
-message_public_ids(id) AS (SELECT value FROM jsonb_array_elements_text(:'message_public_ids'::jsonb)),
+message_bindings AS (SELECT * FROM jsonb_to_recordset(:'message_identities'::jsonb) AS x(id bigint,public_id text,fingerprint text)),
 embedding_ids(id) AS (SELECT value::bigint FROM jsonb_array_elements_text(:'embedding_ids'::jsonb)),
+embedding_bindings AS (SELECT * FROM jsonb_to_recordset(:'embedding_identities'::jsonb) AS x(id bigint,message_id text,fingerprint text)),
 document_ids(id) AS (SELECT value FROM jsonb_array_elements_text(:'document_ids'::jsonb)),
 collection_ids(id) AS (SELECT value FROM jsonb_array_elements_text(:'collection_ids'::jsonb)),
 queue_ids(id) AS (SELECT value::bigint FROM jsonb_array_elements_text(:'queue_ids'::jsonb)),
-active_ids(id) AS (SELECT value FROM jsonb_array_elements_text(:'active_queue_session_ids'::jsonb))
+queue_bindings AS (SELECT * FROM jsonb_to_recordset(:'queue_identities'::jsonb) AS x(id bigint,work_unit_key text,fingerprint text)),
+active_ids(id) AS (SELECT value FROM jsonb_array_elements_text(:'active_queue_session_ids'::jsonb)),
+sequence_marks AS (
+  SELECT value->>'table' AS table_name,value->>'column' AS column_name,
+         value->>'sequence' AS sequence_name,(value->>'high_water')::bigint AS high_water
+  FROM jsonb_array_elements(:'sequence_high_waters'::jsonb)
+),
+exact_messages AS (
+  SELECT m.id,m.public_id,b.fingerprint
+  FROM messages m JOIN message_bindings b ON b.id=m.id AND b.public_id=m.public_id
+    AND b.fingerprint='sha256:' || encode(sha256(convert_to(to_jsonb(m)::text,'UTF8')),'hex')
+  WHERE m.workspace_name=:'workspace'
+),
+exact_embeddings AS (
+  SELECT e.id,e.message_id,b.fingerprint
+  FROM message_embeddings e JOIN embedding_bindings b ON b.id=e.id AND b.message_id=e.message_id
+    AND b.fingerprint='sha256:' || encode(sha256(convert_to(to_jsonb(e)::text,'UTF8')),'hex')
+  WHERE e.workspace_name=:'workspace'
+),
+exact_queue AS (
+  SELECT q.id,q.work_unit_key,b.fingerprint
+  FROM queue q JOIN queue_bindings b ON b.id=q.id AND b.work_unit_key=q.work_unit_key
+    AND b.fingerprint='sha256:' || encode(sha256(convert_to(to_jsonb(q)::text,'UTF8')),'hex')
+  WHERE q.workspace_name=:'workspace'
+)
 SELECT json_build_object(
   'peer_ids', COALESCE((SELECT json_agg(p.id ORDER BY p.id) FROM peers p JOIN peer_ids j ON j.id=p.id WHERE p.workspace_name=:'workspace'
     AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.workspace_name=p.workspace_name AND m.peer_name=p.name AND m.id NOT IN (SELECT id FROM message_ids))
@@ -555,22 +737,56 @@ SELECT json_build_object(
   'session_ids', COALESCE((SELECT json_agg(s.id ORDER BY s.id) FROM sessions s JOIN session_ids j ON j.id=s.id WHERE s.workspace_name=:'workspace'),'[]'::json),
   'session_names', COALESCE((SELECT json_agg(s.name ORDER BY s.name) FROM sessions s JOIN session_names j ON j.name=s.name WHERE s.workspace_name=:'workspace'),'[]'::json),
   'session_peer_link_keys', COALESCE((SELECT json_agg(sp.session_name || '|' || sp.peer_name ORDER BY sp.session_name,sp.peer_name) FROM session_peers sp JOIN session_links j ON j.link_key=sp.session_name || '|' || sp.peer_name WHERE sp.workspace_name=:'workspace'),'[]'::json),
-  'message_ids', COALESCE((SELECT json_agg(m.id ORDER BY m.id) FROM messages m JOIN message_ids j ON j.id=m.id WHERE m.workspace_name=:'workspace'),'[]'::json),
-  'message_public_ids', COALESCE((SELECT json_agg(m.public_id ORDER BY m.public_id) FROM messages m JOIN message_public_ids j ON j.id=m.public_id WHERE m.workspace_name=:'workspace'),'[]'::json),
-  'embedding_ids', COALESCE((SELECT json_agg(e.id ORDER BY e.id) FROM message_embeddings e JOIN embedding_ids j ON j.id=e.id WHERE e.workspace_name=:'workspace'),'[]'::json),
+  'message_ids', COALESCE((SELECT json_agg(id ORDER BY id) FROM exact_messages),'[]'::json),
+  'message_public_ids', COALESCE((SELECT json_agg(public_id ORDER BY public_id) FROM exact_messages),'[]'::json),
+  'message_identities', COALESCE((SELECT json_agg(json_build_object('id',id,'public_id',public_id,'fingerprint',fingerprint) ORDER BY id) FROM exact_messages),'[]'::json),
+  'embedding_ids', COALESCE((SELECT json_agg(id ORDER BY id) FROM exact_embeddings),'[]'::json),
+  'embedding_identities', COALESCE((SELECT json_agg(json_build_object('id',id,'message_id',message_id,'fingerprint',fingerprint) ORDER BY id) FROM exact_embeddings),'[]'::json),
   'document_ids', COALESCE((SELECT json_agg(d.id ORDER BY d.id) FROM documents d JOIN document_ids j ON j.id=d.id WHERE d.workspace_name=:'workspace'),'[]'::json),
   'collection_ids', COALESCE((SELECT json_agg(c.id ORDER BY c.id) FROM collections c JOIN collection_ids j ON j.id=c.id WHERE c.workspace_name=:'workspace'),'[]'::json),
-  'queue_ids', COALESCE((SELECT json_agg(q.id ORDER BY q.id) FROM queue q JOIN queue_ids j ON j.id=q.id WHERE q.workspace_name=:'workspace'),'[]'::json),
-  'active_queue_session_ids', COALESCE((SELECT json_agg(a.id ORDER BY a.id) FROM active_queue_sessions a JOIN active_ids j ON j.id=a.id),'[]'::json)
+  'queue_ids', COALESCE((SELECT json_agg(id ORDER BY id) FROM exact_queue),'[]'::json),
+  'queue_identities', COALESCE((SELECT json_agg(json_build_object('id',id,'work_unit_key',work_unit_key,'fingerprint',fingerprint) ORDER BY id) FROM exact_queue),'[]'::json),
+  'active_queue_session_ids', COALESCE((SELECT json_agg(a.id ORDER BY a.id) FROM active_queue_sessions a JOIN active_ids j ON j.id=a.id),'[]'::json),
+  'identity_collisions', json_build_object(
+    'messages',COALESCE((SELECT json_agg(m.id ORDER BY m.id) FROM messages m JOIN message_ids j ON j.id=m.id WHERE m.workspace_name=:'workspace' AND NOT EXISTS (SELECT 1 FROM exact_messages x WHERE x.id=m.id)),'[]'::json),
+    'message_embeddings',COALESCE((SELECT json_agg(e.id ORDER BY e.id) FROM message_embeddings e JOIN embedding_ids j ON j.id=e.id WHERE e.workspace_name=:'workspace' AND NOT EXISTS (SELECT 1 FROM exact_embeddings x WHERE x.id=e.id)),'[]'::json),
+    'queue',COALESCE((SELECT json_agg(q.id ORDER BY q.id) FROM queue q JOIN queue_ids j ON j.id=q.id WHERE q.workspace_name=:'workspace' AND NOT EXISTS (SELECT 1 FROM exact_queue x WHERE x.id=q.id)),'[]'::json)
+  ),
+  'sequence_high_water_deficits',COALESCE((
+    SELECT json_agg(json_build_object('table',table_name,'column',column_name,'sequence',sequence_name,'high_water',high_water) ORDER BY table_name)
+    FROM sequence_marks s
+    WHERE s.column_name<>'id'
+       OR s.sequence_name IS DISTINCT FROM pg_get_serial_sequence(s.table_name,'id')
+       OR COALESCE(pg_sequence_last_value(to_regclass(s.sequence_name)),0)<s.high_water
+       OR (s.table_name='messages' AND COALESCE(pg_sequence_last_value(to_regclass(s.sequence_name)),0)<COALESCE((SELECT max(id) FROM messages),0))
+       OR (s.table_name='message_embeddings' AND COALESCE(pg_sequence_last_value(to_regclass(s.sequence_name)),0)<COALESCE((SELECT max(id) FROM message_embeddings),0))
+       OR (s.table_name='queue' AND COALESCE(pg_sequence_last_value(to_regclass(s.sequence_name)),0)<COALESCE((SELECT max(id) FROM queue),0))
+  ),'[]'::json)
 )::text;
 """
     payload = psql_json(database, sql, variables=variables)
     if not isinstance(payload, Mapping):
         raise ValueError("tombstone exact residue query failed")
+    collisions = payload.get("identity_collisions") or {}
+    if not isinstance(collisions, Mapping) or any(collisions.get(key) for key in ("messages", "message_embeddings", "queue")):
+        raise ValueError("tombstone replay blocked by bigint identity collision")
+    for key in BIGINT_IDENTITY_KEYS:
+        observed = payload.get(key) or []
+        if not isinstance(observed, list):
+            raise ValueError("tombstone exact residue identity payload is invalid")
+        expected_by_id = {
+            int(item["id"]): canonical_json(item) for item in normalized[key]
+        }
+        if any(
+            not isinstance(item, Mapping)
+            or expected_by_id.get(int(item.get("id", -1))) != canonical_json(item)
+            for item in observed
+        ):
+            raise ValueError("tombstone replay blocked by bigint identity collision")
     return {
         str(key): list(value)
         for key, value in payload.items()
-        if isinstance(value, list) and value
+        if key != "identity_collisions" and isinstance(value, list) and value
     }
 
 
@@ -734,16 +950,7 @@ def participant_deletion_candidate_sets(
         sql,
         variables={"workspace": workspace, "peer": peer, "service_peers": canonical_json(names)},
     )
-    expected = set(DELETION_CANDIDATE_KEYS)
-    if not isinstance(raw, Mapping) or set(raw) != expected:
-        raise ValueError("participant deletion candidate payload is invalid")
-    normalized: dict[str, list[Any]] = {}
-    for key in sorted(expected):
-        value = raw[key]
-        if not isinstance(value, list):
-            raise ValueError("participant deletion candidate set is invalid")
-        normalized[key] = sorted(set(value), key=lambda item: (str(type(item)), str(item)))
-    return normalized
+    return _normalize_candidate_sets(raw, DELETION_CANDIDATE_KEYS)
 
 
 def retention_candidate_sets(
@@ -764,18 +971,7 @@ def retention_candidate_sets(
         _safe_capability_source(RETENTION_CANDIDATE_SQL),
         variables={"workspace": workspace, "cutoff": cutoff},
     )
-    if not isinstance(raw, Mapping) or set(raw) != set(RETENTION_CANDIDATE_KEYS):
-        raise ValueError("retention candidate payload is invalid")
-    normalized: dict[str, list[Any]] = {}
-    for key in sorted(RETENTION_CANDIDATE_KEYS):
-        value = raw[key]
-        if not isinstance(value, list):
-            raise ValueError("retention candidate set is invalid")
-        normalized[key] = sorted(
-            set(value),
-            key=lambda item: (str(type(item)), str(item)),
-        )
-    return normalized
+    return _normalize_candidate_sets(raw, RETENTION_CANDIDATE_KEYS)
 
 
 def _safe_capability_source(path: Path, *, private: bool = False) -> str:
@@ -981,8 +1177,8 @@ def collect_metrics(database: str, base_url: str, workspace: str) -> dict[str, A
 'embedding_recent_failed', (SELECT count(*) FROM message_embeddings WHERE workspace_name=:'workspace' AND sync_state='failed' AND created_at > now()-interval '24 hours'),
 'model_error_rows', (SELECT count(*) FROM queue WHERE workspace_name=:'workspace' AND task_type='representation' AND COALESCE(error,'')<>''),
 'embedding_error_rows', (SELECT count(*) FROM message_embeddings WHERE workspace_name=:'workspace' AND sync_state='failed'),
-'derivation_latency_p95_seconds', COALESCE((SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY extract(epoch FROM d.created_at-(d.internal_metadata->>'message_created_at')::timestamptz))::bigint FROM documents d WHERE d.workspace_name=:'workspace' AND d.created_at>now()-interval '24 hours' AND d.internal_metadata ? 'message_created_at'),0),
-'embedding_latency_p95_seconds', COALESCE((SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY extract(epoch FROM e.last_sync_at-m.created_at))::bigint FROM message_embeddings e JOIN messages m ON m.workspace_name=e.workspace_name AND m.public_id=e.message_id WHERE e.workspace_name=:'workspace' AND m.created_at>now()-interval '24 hours' AND e.sync_state='synced' AND e.last_sync_at IS NOT NULL),0),
+'derivation_latency_p95_seconds', COALESCE((SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY extract(epoch FROM d.created_at-(d.internal_metadata->>'message_created_at')::timestamptz))::bigint FROM documents d WHERE d.workspace_name=:'workspace' AND d.created_at>now()-interval '15 minutes' AND (d.internal_metadata->>'message_created_at')::timestamptz>now()-interval '15 minutes' AND d.internal_metadata ? 'message_created_at'),0),
+'embedding_latency_p95_seconds', COALESCE((SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY extract(epoch FROM e.last_sync_at-m.created_at))::bigint FROM message_embeddings e JOIN messages m ON m.workspace_name=e.workspace_name AND m.public_id=e.message_id WHERE e.workspace_name=:'workspace' AND m.created_at>now()-interval '15 minutes' AND e.last_sync_at>now()-interval '15 minutes' AND e.sync_state='synced' AND e.last_sync_at IS NOT NULL),0),
 'max_message_tokens', COALESCE((SELECT max(token_count) FROM messages WHERE workspace_name=:'workspace'),0)
 )::text;"""
     metrics = dict(psql_json(database, sql, variables={"workspace": workspace}) or {})
@@ -1151,12 +1347,112 @@ def make_embedding_recovery_plan(
     return {**payload, "plan_digest": sha256_json(payload)}
 
 
+def _deletion_plan_contract(
+    plan: Mapping[str, Any],
+) -> tuple[str, frozenset[str]]:
+    if plan.get("schema_version") == RETENTION_SCHEMA and validate_retention_plan(plan):
+        return "retention", RETENTION_CANDIDATE_KEYS
+    if plan.get("schema_version") == DELETION_SCHEMA and validate_participant_deletion_plan(plan):
+        return "participant_deletion", DELETION_CANDIDATE_KEYS
+    raise ValueError("deletion backup plan is invalid")
+
+
+def deletion_candidates_for_plan(
+    database: str, plan: Mapping[str, Any]
+) -> dict[str, list[Any]]:
+    operation, _ = _deletion_plan_contract(plan)
+    if operation == "retention":
+        return retention_candidate_sets(
+            database, str(plan["workspace"]), str(plan["cutoff"])
+        )
+    return participant_deletion_candidate_sets(
+        database,
+        str(plan["workspace"]),
+        str(plan["peer"]),
+        list(plan["allowed_service_peers"]),
+    )
+
+
+def deletion_backup_coverage(
+    *,
+    plan: Mapping[str, Any],
+    candidate_sets: Mapping[str, Sequence[Any]],
+) -> dict[str, Any]:
+    operation, expected_keys = _deletion_plan_contract(plan)
+    normalized = _normalize_candidate_sets(candidate_sets, expected_keys)
+    if sha256_json(normalized) != plan.get("candidate_sets_digest"):
+        raise ValueError("deletion backup candidates do not match the signed plan")
+    if any(
+        sha256_json(normalized[key]) != (plan.get("id_set_digests") or {}).get(key)
+        for key in expected_keys
+    ):
+        raise ValueError("deletion backup candidate digest does not match the signed plan")
+    coverage = {
+        "schema_version": DELETION_BACKUP_COVERAGE_SCHEMA,
+        "operation": operation,
+        "plan_schema_version": plan["schema_version"],
+        "plan_digest": plan["plan_digest"],
+        "plan_generated_at": plan["generated_at"],
+        "database_oid": plan["database_oid"],
+        "schema_fingerprint": plan["schema_fingerprint"],
+        "workspace": plan["workspace"],
+        "candidate_sets_digest": plan["candidate_sets_digest"],
+        "id_set_digests": {
+            key: plan["id_set_digests"][key] for key in sorted(expected_keys)
+        },
+        "candidate_counts": {
+            key: len(normalized[key]) for key in sorted(expected_keys)
+        },
+    }
+    if operation == "participant_deletion":
+        coverage["participant_peer"] = plan["peer"]
+    coverage["coverage_digest"] = sha256_json(coverage)
+    return coverage
+
+
+def deletion_backup_covers_plan(
+    metadata: Mapping[str, Any],
+    *,
+    plan: Mapping[str, Any],
+    candidate_sets: Mapping[str, Sequence[Any]],
+    now: datetime | None = None,
+) -> bool:
+    try:
+        expected = deletion_backup_coverage(plan=plan, candidate_sets=candidate_sets)
+        created = datetime.fromisoformat(
+            str(metadata["created_at"]).replace("Z", "+00:00")
+        )
+        generated = datetime.fromisoformat(
+            str(plan["generated_at"]).replace("Z", "+00:00")
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    if created.tzinfo is None or generated.tzinfo is None:
+        return False
+    created_utc = created.astimezone(timezone.utc)
+    generated_utc = generated.astimezone(timezone.utc)
+    if not (
+        generated_utc < created_utc <= current
+        and current - created_utc
+        <= timedelta(seconds=PUBLIC_BACKUP_REUSE_MAX_AGE_SECONDS)
+    ):
+        return False
+    coverage = metadata.get("deletion_coverage")
+    return (
+        metadata.get("verified") is True
+        and isinstance(coverage, Mapping)
+        and dict(coverage) == expected
+    )
+
+
 def create_backup(
     database: str,
     destination: Path,
     *,
     maximum_bytes: int | None = None,
-    retention_coverage: Mapping[str, Any] | None = None,
+    deletion_plan: Mapping[str, Any] | None = None,
+    candidate_sets: Mapping[str, Sequence[Any]] | None = None,
 ) -> dict[str, Any]:
     dest = Path(destination).expanduser().resolve()
     if maximum_bytes is not None and (
@@ -1170,6 +1466,18 @@ def create_backup(
     temp = dest.with_name(dest.name + ".partial")
     if temp.exists():
         raise FileExistsError(f"partial backup already exists: {temp}")
+    if (deletion_plan is None) != (candidate_sets is None):
+        raise ValueError("deletion backup requires both a signed plan and candidates")
+    deletion_coverage = None
+    normalized_candidates = None
+    if deletion_plan is not None and candidate_sets is not None:
+        _operation, expected_keys = _deletion_plan_contract(deletion_plan)
+        normalized_candidates = _normalize_candidate_sets(candidate_sets, expected_keys)
+        deletion_coverage = deletion_backup_coverage(
+            plan=deletion_plan, candidate_sets=normalized_candidates
+        )
+        if deletion_candidates_for_plan(database, deletion_plan) != normalized_candidates:
+            raise ValueError("deletion backup candidates changed before snapshot")
     commands = backup_commands(database, temp)
     try:
         run_checked(commands[0])
@@ -1190,6 +1498,10 @@ def create_backup(
     finally:
         if temp.exists():
             temp.unlink()
+    if deletion_plan is not None and normalized_candidates is not None:
+        if deletion_candidates_for_plan(database, deletion_plan) != normalized_candidates:
+            dest.unlink(missing_ok=True)
+            raise ValueError("deletion backup candidates changed during snapshot")
     digest = file_sha256(dest).removeprefix("sha256:")
     manifest = {
         "schema_version": BACKUP_SCHEMA,
@@ -1199,8 +1511,8 @@ def create_backup(
         "size_bytes": dest.stat().st_size,
         "sha256": digest,
     }
-    if retention_coverage is not None:
-        manifest["retention_coverage"] = dict(retention_coverage)
+    if deletion_coverage is not None:
+        manifest["deletion_coverage"] = deletion_coverage
     manifest["manifest_digest"] = sha256_json(manifest)
     manifest_path = dest.with_suffix(dest.suffix + ".json")
     fd, tmp_name = tempfile.mkstemp(prefix=manifest_path.name + ".", dir=dest.parent)
@@ -1384,9 +1696,27 @@ def verified_backup_metadata(path: Path, *, expected_database: str) -> dict[str,
         "manifest_digest": manifest["manifest_digest"],
         "verified": True,
     }
-    if "retention_coverage" in manifest:
-        result["retention_coverage"] = manifest["retention_coverage"]
+    if "deletion_coverage" in manifest:
+        result["deletion_coverage"] = manifest["deletion_coverage"]
     return result
+
+
+def verified_deletion_backup_for_plan(
+    backup_path: Path,
+    *,
+    database: str,
+    plan: Mapping[str, Any],
+    candidate_sets: Mapping[str, Sequence[Any]],
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    metadata = verified_backup_metadata(backup_path, expected_database=database)
+    if not deletion_backup_covers_plan(
+        metadata, plan=plan, candidate_sets=candidate_sets, now=now
+    ):
+        raise ValueError(
+            "verified backup is stale, incomplete, or bound to a different deletion plan"
+        )
+    return metadata
 
 
 def build_honcho_quiescence_receipt(
@@ -1752,7 +2082,13 @@ def _apply_participant_deletion(
     for key, value in candidates.items():
         if sha256_json(value) != plan["id_set_digests"][key]:
             raise ValueError("participant deletion candidate digest changed")
-    backup_metadata = verified_backup_metadata(backup_path, expected_database=database)
+    backup_metadata = verified_deletion_backup_for_plan(
+        backup_path,
+        database=database,
+        plan=plan,
+        candidate_sets=candidates,
+        now=now,
+    )
     tombstone = _pending_exact_tombstone(
         schema_version=DELETION_TOMBSTONE_SCHEMA,
         operation="participant_deletion",
@@ -1826,10 +2162,15 @@ def _retention_psql_command(
     ]
     for key in (
         "message_ids",
+        "message_public_ids",
+        "message_identities",
         "embedding_ids",
+        "embedding_identities",
         "document_ids",
         "queue_ids",
+        "queue_identities",
         "active_queue_session_ids",
+        "sequence_high_waters",
     ):
         command.extend(["-v", f"{key}={canonical_json(candidates[key])}"])
     return command
@@ -1890,7 +2231,13 @@ def _apply_retention(
     for key, value in candidates.items():
         if sha256_json(value) != plan["id_set_digests"][key]:
             raise ValueError("retention candidate digest changed")
-    backup_metadata = verified_backup_metadata(backup_path, expected_database=database)
+    backup_metadata = verified_deletion_backup_for_plan(
+        backup_path,
+        database=database,
+        plan=plan,
+        candidate_sets=candidates,
+        now=now,
+    )
     tombstone = _pending_exact_tombstone(
         schema_version=RETENTION_TOMBSTONE_SCHEMA,
         operation="retention",
@@ -1954,9 +2301,11 @@ def _participant_psql_command(
         "-v", f"workspace={workspace}", "-v", f"peer={peer}",
     ]
     for key in (
-        "peer_ids", "session_ids", "session_names", "session_peer_link_keys", "message_ids",
-        "embedding_ids", "document_ids", "collection_ids", "queue_ids",
-        "work_unit_keys", "active_queue_session_ids",
+        "peer_ids", "session_ids", "session_names", "session_peer_link_keys",
+        "message_ids", "message_public_ids", "message_identities",
+        "embedding_ids", "embedding_identities", "document_ids", "collection_ids",
+        "queue_ids", "queue_identities", "work_unit_keys", "active_queue_session_ids",
+        "sequence_high_waters",
     ):
         command.extend(["-v", f"{key}={canonical_json(candidates[key])}"])
     expected = expected_candidates or candidates
@@ -2024,29 +2373,6 @@ def _replay_tombstone(
         raise ValueError("tombstone replay exact IDs are invalid")
     candidates = {str(key): list(value) for key, value in exact.items()}
     before = exact_tombstone_residue(database, workspace, candidates)
-    if not before:
-        cache = flush_dedicated_honcho_cache(redis_url)
-        if tombstone.get("state") == "applied":
-            return {
-                "applied": True,
-                "already_applied": True,
-                "database_oid": oid,
-                "tombstone_digest": tombstone["tombstone_digest"],
-                "cache": cache,
-            }
-        applied = _mark_exact_tombstone_applied(
-            tombstone,
-            tombstone_path=tombstone_path,
-            cache=cache,
-            replay_backup=backup,
-        )
-        return {
-            "applied": True,
-            "already_applied": False,
-            "database_oid": oid,
-            "tombstone_digest": applied["tombstone_digest"],
-            "cache": cache,
-        }
 
     if operation == "participant_deletion":
         run_checked(
@@ -2080,6 +2406,15 @@ def _replay_tombstone(
         raise RuntimeError("tombstone exact-ID replay verification failed")
     cache = flush_dedicated_honcho_cache(redis_url)
     assert_honcho_quiescent(base_url, labels)
+    if not before and tombstone.get("state") == "applied":
+        return {
+            "applied": True,
+            "already_applied": True,
+            "database_oid": oid,
+            "operation": operation,
+            "tombstone_digest": tombstone["tombstone_digest"],
+            "cache": cache,
+        }
     updated = _mark_exact_tombstone_applied(
         tombstone,
         tombstone_path=tombstone_path,
@@ -2290,141 +2625,6 @@ def enforce_public_backup_quota(
     return usage
 
 
-def _normalized_retention_candidate_sets(
-    candidate_sets: Mapping[str, Sequence[Any]],
-) -> dict[str, list[Any]]:
-    if set(candidate_sets) != set(RETENTION_CANDIDATE_KEYS):
-        raise ValueError("retention candidate sets are incomplete")
-    return {
-        key: sorted(
-            set(candidate_sets[key]),
-            key=lambda item: (str(type(item)), str(item)),
-        )
-        for key in sorted(RETENTION_CANDIDATE_KEYS)
-    }
-
-
-def build_retention_backup_coverage(
-    *,
-    database_identity_digest: str,
-    workspace: str,
-    coverage_cutoff: str,
-    candidate_sets: Mapping[str, Sequence[Any]],
-) -> dict[str, Any]:
-    if re.fullmatch(
-        r"(?:sha256:)?[0-9a-f]{64}", database_identity_digest or ""
-    ) is None:
-        raise ValueError("retention backup database identity is invalid")
-    if SAFE_NAME_RE.fullmatch(workspace or "") is None:
-        raise ValueError("retention backup workspace is invalid")
-    try:
-        parsed_cutoff = datetime.fromisoformat(coverage_cutoff.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError("retention backup coverage cutoff is invalid") from exc
-    if parsed_cutoff.tzinfo is None:
-        raise ValueError("retention backup coverage cutoff must include a timezone")
-    normalized = _normalized_retention_candidate_sets(candidate_sets)
-    coverage = {
-        "schema_version": RETENTION_BACKUP_COVERAGE_SCHEMA,
-        "database_identity_digest": database_identity_digest.removeprefix("sha256:"),
-        "workspace": workspace,
-        "coverage_cutoff": parsed_cutoff.astimezone(timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z"),
-        "candidate_sets": normalized,
-        "candidate_sets_digest": sha256_json(normalized),
-    }
-    return coverage
-
-
-def retention_backup_covers(
-    metadata: Mapping[str, Any],
-    *,
-    expected_database: str,
-    database_identity_digest: str,
-    workspace: str,
-    cutoff: str,
-    candidate_sets: Mapping[str, Sequence[Any]],
-    now: datetime,
-    maximum_age_seconds: int = PUBLIC_BACKUP_REUSE_MAX_AGE_SECONDS,
-) -> bool:
-    coverage = metadata.get("retention_coverage")
-    if (
-        metadata.get("verified") is not True
-        or metadata.get("database") != expected_database
-        or not isinstance(coverage, Mapping)
-        or coverage.get("schema_version") != RETENTION_BACKUP_COVERAGE_SCHEMA
-        or coverage.get("database_identity_digest")
-        != database_identity_digest.removeprefix("sha256:")
-        or coverage.get("workspace") != workspace
-        or type(maximum_age_seconds) is not int
-        or maximum_age_seconds < 1
-    ):
-        return False
-    try:
-        created_raw = datetime.fromisoformat(
-            str(metadata["created_at"]).replace("Z", "+00:00")
-        )
-        requested_cutoff_raw = datetime.fromisoformat(cutoff.replace("Z", "+00:00"))
-        coverage_cutoff_raw = datetime.fromisoformat(
-            str(coverage["coverage_cutoff"]).replace("Z", "+00:00")
-        )
-        covered = _normalized_retention_candidate_sets(coverage["candidate_sets"])
-        requested = _normalized_retention_candidate_sets(candidate_sets)
-    except (KeyError, TypeError, ValueError):
-        return False
-    if (
-        created_raw.tzinfo is None
-        or requested_cutoff_raw.tzinfo is None
-        or coverage_cutoff_raw.tzinfo is None
-        or now.tzinfo is None
-    ):
-        return False
-    created = created_raw.astimezone(timezone.utc)
-    requested_cutoff = requested_cutoff_raw.astimezone(timezone.utc)
-    coverage_cutoff = coverage_cutoff_raw.astimezone(timezone.utc)
-    age = now.astimezone(timezone.utc) - created
-    if not timedelta(0) <= age <= timedelta(seconds=maximum_age_seconds):
-        return False
-    if requested_cutoff > coverage_cutoff:
-        return False
-    if coverage.get("candidate_sets_digest") != sha256_json(covered):
-        return False
-    return all(set(requested[key]).issubset(set(covered[key])) for key in requested)
-
-
-def find_reusable_public_backup(
-    backup_root: Path,
-    *,
-    expected_database: str,
-    database_identity_digest: str,
-    workspace: str,
-    cutoff: str,
-    candidate_sets: Mapping[str, Sequence[Any]],
-    now: datetime,
-) -> dict[str, Any] | None:
-    root = _public_backup_root(backup_root)
-    for manifest_path in sorted(root.glob("*.dump.json"), reverse=True):
-        _private_backup_artifact(manifest_path)
-        archive = root / manifest_path.name.removesuffix(".json")
-        metadata = verified_backup_metadata(
-            archive,
-            expected_database=expected_database,
-        )
-        if retention_backup_covers(
-            metadata,
-            expected_database=expected_database,
-            database_identity_digest=database_identity_digest,
-            workspace=workspace,
-            cutoff=cutoff,
-            candidate_sets=candidate_sets,
-            now=now,
-        ):
-            return metadata
-    return None
-
-
 def expire_public_backups(backup_root: Path, *, now: datetime) -> int:
     root = _public_backup_root(backup_root)
     archives = _public_backup_archives(root)
@@ -2558,65 +2758,6 @@ def run_public_retention_cycle(
             labels,
             Path(targets["server_root"]),
         )
-        enforce_public_backup_quota(backup_root)
-        backup_metadata = find_reusable_public_backup(
-            backup_root,
-            expected_database=database,
-            database_identity_digest=identity_digest,
-            workspace=workspace,
-            cutoff=boundary["cutoff"],
-            candidate_sets=candidates,
-            now=datetime.now(timezone.utc),
-        )
-        backup_reused = backup_metadata is not None
-        if backup_metadata is None:
-            parsed_cutoff = datetime.fromisoformat(
-                boundary["cutoff"].replace("Z", "+00:00")
-            ).astimezone(timezone.utc)
-            coverage_cutoff = (
-                parsed_cutoff
-                + timedelta(seconds=PUBLIC_BACKUP_REUSE_MAX_AGE_SECONDS)
-            ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-            coverage_candidates = retention_candidate_sets(
-                database,
-                workspace,
-                coverage_cutoff,
-            )
-            coverage = build_retention_backup_coverage(
-                database_identity_digest=identity_digest,
-                workspace=workspace,
-                coverage_cutoff=coverage_cutoff,
-                candidate_sets=coverage_candidates,
-            )
-            usage = enforce_public_backup_quota(
-                backup_root,
-                additional_count=1,
-                additional_bytes=1,
-            )
-            remaining_bytes = PUBLIC_BACKUP_MAX_BYTES - usage["bytes"]
-            run_id = (
-                f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-"
-                f"{secrets.token_hex(4)}"
-            )
-            backup_path = backup_root / f"{run_id}.dump"
-            backup_manifest = create_backup(
-                database,
-                backup_path,
-                maximum_bytes=remaining_bytes,
-                retention_coverage=coverage,
-            )
-            enforce_public_backup_quota(backup_root)
-            backup_metadata = {
-                "path": str(backup_path),
-                "sha256": "sha256:" + str(backup_manifest["sha256"]),
-                "size_bytes": int(backup_manifest["size_bytes"]),
-                "database": database,
-                "created_at": backup_manifest["created_at"],
-                "manifest_digest": backup_manifest["manifest_digest"],
-                "retention_coverage": coverage,
-                "verified": True,
-            }
-
         boundary = _database_retention_boundary(database)
         candidates = retention_candidate_sets(database, workspace, boundary["cutoff"])
         counts = {
@@ -2626,20 +2767,8 @@ def run_public_retention_cycle(
             "documents": len(candidates["document_ids"]),
             "active_queue_sessions": len(candidates["active_queue_session_ids"]),
         }
-        result["backup_reused"] = backup_reused
+        result["backup_reused"] = False
         if candidates["message_ids"]:
-            if not retention_backup_covers(
-                backup_metadata,
-                expected_database=database,
-                database_identity_digest=identity_digest,
-                workspace=workspace,
-                cutoff=boundary["cutoff"],
-                candidate_sets=candidates,
-                now=datetime.now(timezone.utc),
-            ):
-                raise RuntimeError(
-                    "verified public backup does not cover final retention transaction"
-                )
             oid = database_oid(database)
             plan = make_retention_plan(
                 {
@@ -2652,10 +2781,29 @@ def run_public_retention_cycle(
                     "embedding_count": counts["message_embeddings"],
                     "document_count": counts["documents"],
                     "schema_fingerprint": schema_fingerprint(database),
+                    "generated_at": utc_now(),
                 },
                 candidate_sets=candidates,
             )
-            backup_path = Path(str(backup_metadata["path"]))
+            usage = enforce_public_backup_quota(
+                backup_root,
+                additional_count=1,
+                additional_bytes=1,
+            )
+            remaining_bytes = PUBLIC_BACKUP_MAX_BYTES - usage["bytes"]
+            run_id = (
+                f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-"
+                f"{secrets.token_hex(4)}"
+            )
+            backup_path = backup_root / f"{run_id}.dump"
+            create_backup(
+                database,
+                backup_path,
+                maximum_bytes=remaining_bytes,
+                deletion_plan=plan,
+                candidate_sets=candidates,
+            )
+            enforce_public_backup_quota(backup_root)
             applied = apply_retention(
                 database=database,
                 plan=plan,
@@ -2840,6 +2988,7 @@ def parser() -> argparse.ArgumentParser:
     backup = sub.add_parser("backup")
     backup.add_argument("--database", required=True)
     backup.add_argument("--manifest", required=True)
+    backup.add_argument("--plan", required=True)
     backup.add_argument("--output", required=True)
 
     restore = sub.add_parser("restore-verify")
@@ -3054,6 +3203,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "retention_days": args.days,
                 **counts,
                 "schema_fingerprint": schema_fingerprint(args.database),
+                "generated_at": utc_now(),
             },
             candidate_sets=candidates,
         )
@@ -3107,7 +3257,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         assert_public_database_isolation(
             args.database, str(targets["workspace"])
         )
-        print(json.dumps(create_backup(args.database, Path(args.output)), indent=2, sort_keys=True))
+        plan = json.loads(
+            _safe_capability_source(Path(args.plan).expanduser().resolve(), private=True)
+        )
+        _operation, _candidate_keys = _deletion_plan_contract(plan)
+        if plan.get("workspace") != targets["workspace"]:
+            raise ValueError("backup plan workspace does not match the dedicated public service")
+        current_schema = "sha256:" + schema_fingerprint(args.database)
+        planned_schema = str(plan["schema_fingerprint"])
+        if not planned_schema.startswith("sha256:"):
+            planned_schema = "sha256:" + planned_schema
+        if database_oid(args.database) != plan["database_oid"] or current_schema != planned_schema:
+            raise ValueError("backup plan database or schema changed")
+        candidates = deletion_candidates_for_plan(args.database, plan)
+        print(
+            json.dumps(
+                create_backup(
+                    args.database,
+                    Path(args.output),
+                    deletion_plan=plan,
+                    candidate_sets=candidates,
+                ),
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return 0
 
     if args.command == "restore-verify":

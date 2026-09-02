@@ -221,10 +221,17 @@ INSERT INTO active_queue_sessions VALUES
     }
     for key in (
         "message_ids",
+        "message_public_ids",
+        "message_identities",
         "embedding_ids",
+        "embedding_identities",
         "document_ids",
         "queue_ids",
+        "queue_identities",
+        "sequence_high_waters",
+        "work_unit_keys",
         "active_queue_session_ids",
+        "active_work_unit_keys",
     ):
         variables[key] = json.dumps(candidates[key], separators=(",", ":"))
     psql(public_db, retention_apply_sql(), variables)
@@ -271,14 +278,14 @@ INSERT INTO session_peers VALUES
  ('public-workspace','old-session','participant'),
  ('public-workspace','old-session','guide');
 INSERT INTO messages VALUES
- (100,'message-old','old-session','participant','public-workspace',now()-interval '1 day');
+ (100,'message-old','old-session','participant','public-workspace','2026-08-01T00:00:00Z');
 INSERT INTO message_embeddings VALUES (120,'message-old','public-workspace');
 INSERT INTO collections VALUES ('collection-old','guide','participant','public-workspace');
 INSERT INTO documents VALUES
  ('document-old','public-workspace','old-session','guide','participant','[]','{"message_ids":["100"]}',NULL,'synced');
 INSERT INTO queue VALUES
- (130,'session-old','delete-work','representation','{}',false,NULL,now(),'public-workspace',100),
- (131,NULL,'delete-work','representation','{"sibling":true}',false,NULL,now(),'public-workspace',NULL);
+ (130,'session-old','delete-work','representation','{}',false,NULL,'2026-08-01T00:00:00Z','public-workspace',100),
+ (131,NULL,'delete-work','representation','{"sibling":true}',false,NULL,'2026-08-01T00:00:00Z','public-workspace',NULL);
 INSERT INTO active_queue_sessions VALUES ('active-old','delete-work',now());
 """,
     )
@@ -303,12 +310,18 @@ INSERT INTO active_queue_sessions VALUES ('active-old','delete-work',now());
             "session_names",
             "session_peer_link_keys",
             "message_ids",
+            "message_public_ids",
+            "message_identities",
             "embedding_ids",
+            "embedding_identities",
             "document_ids",
             "collection_ids",
             "queue_ids",
+            "queue_identities",
+            "sequence_high_waters",
             "work_unit_keys",
             "active_queue_session_ids",
+            "active_work_unit_keys",
         ):
             variables[key] = json.dumps(exact[key], separators=(",", ":"))
         expected_sets = expected or exact
@@ -344,7 +357,7 @@ INSERT INTO session_peers VALUES
  ('public-workspace','old-session','guide'),
  ('public-workspace','new-session','participant');
 INSERT INTO messages VALUES
- (100,'message-old','old-session','participant','public-workspace',now()-interval '1 day'),
+ (100,'message-old','old-session','participant','public-workspace','2026-08-01T00:00:00Z'),
  (200,'message-new','new-session','participant','public-workspace',now());
 INSERT INTO message_embeddings VALUES
  (120,'message-old','public-workspace'),(220,'message-new','public-workspace');
@@ -352,8 +365,8 @@ INSERT INTO collections VALUES ('collection-old','guide','participant','public-w
 INSERT INTO documents VALUES
  ('document-old','public-workspace','old-session','guide','participant','[]','{"message_ids":["100"]}',NULL,'synced');
 INSERT INTO queue VALUES
- (130,'session-old','delete-work','representation','{}',false,NULL,now(),'public-workspace',100),
- (131,NULL,'delete-work','representation','{"sibling":true}',false,NULL,now(),'public-workspace',NULL),
+ (130,'session-old','delete-work','representation','{}',false,NULL,'2026-08-01T00:00:00Z','public-workspace',100),
+ (131,NULL,'delete-work','representation','{"sibling":true}',false,NULL,'2026-08-01T00:00:00Z','public-workspace',NULL),
  (132,'session-new','delete-work','representation','{"post_request":true}',false,NULL,now(),'public-workspace',200);
 INSERT INTO active_queue_sessions VALUES
  ('active-old','delete-work',now()),('active-new','new-work',now());

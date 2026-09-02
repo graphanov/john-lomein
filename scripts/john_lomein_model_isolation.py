@@ -408,9 +408,17 @@ def _hidden_credential_paths(
     )
 
 
+def _release_bundle_control_root(env: Mapping[str, str]) -> Path:
+    root = _runtime_home(env) / "private" / "release-bundles"
+    if root.is_symlink() or not root.is_dir():
+        raise IsolationError("release_bundle_controller_root_unsafe")
+    _validate_protected_tree(root, label="release_bundles")
+    return root
+
+
 def _hidden_control_roots(env: Mapping[str, str]) -> list[Path]:
     home = _runtime_home(env)
-    roots: list[Path] = []
+    roots: list[Path] = [_release_bundle_control_root(env)]
     candidates = (
         (home / "private" / "owner-overrides", "owner-overrides"),
         (home / "private" / "review-receipts", "review-receipts"),
@@ -428,13 +436,6 @@ def _hidden_control_roots(env: Mapping[str, str]) -> list[Path]:
             raise IsolationError(f"{label}_control_root_not_directory")
         roots.append(checked)
     return roots
-
-
-def _controller_readable_roots(env: Mapping[str, str]) -> list[Path]:
-    root = _runtime_home(env) / "private" / "release-bundles"
-    if not root.exists() or root.is_symlink() or not root.is_dir():
-        raise IsolationError("release_bundle_controller_root_unsafe")
-    return [root.resolve()]
 
 
 def _shared_gateway_lock_root(env: Mapping[str, str]) -> Path | None:
@@ -829,36 +830,75 @@ def _hermes_runtime_read_roots(
 
 
 def _guide_gateway_network_allowed(
+    env: Mapping[str, str],
     active_profile: Path | None,
     profile: str | None,
     command: Sequence[str],
 ) -> bool:
+    guide_profile = CANONICAL_ROLE_PROFILES["guide"]
+    canonical_suffix = [
+        "-I",
+        "-m",
+        "hermes_cli.main",
+        "gateway",
+        "run",
+        "--replace",
+    ]
+    venv_raw = str(env.get("VIRTUAL_ENV") or "").strip()
+    interpreter = Path(os.path.abspath(str(command[0]))) if command else None
     if (
-        profile != CANONICAL_ROLE_PROFILES["guide"]
+        profile != guide_profile
         or active_profile is None
-        or not any(
-            command[index : index + 2] == ["gateway", "run"]
-            for index in range(len(command) - 1)
-        )
+        or len(command) != len(canonical_suffix) + 1
+        or list(command[1:]) != canonical_suffix
+        or interpreter is None
+        or re.fullmatch(r"python(?:3(?:\.\d+)?)?", interpreter.name) is None
+        or not venv_raw
+        or interpreter.parent
+        != Path(os.path.abspath(Path(venv_raw).expanduser())) / "bin"
     ):
         return False
-    config_path = active_profile / "config.yaml"
-    try:
-        info = config_path.lstat()
-    except OSError:
-        raise IsolationError("model_isolation_guide_config_missing") from None
-    if (
-        config_path.is_symlink()
-        or not stat.S_ISREG(info.st_mode)
-        or info.st_uid != os.geteuid()
-        or info.st_mode & 0o022
-    ):
-        raise IsolationError("model_isolation_guide_config_unsafe")
+    # VIRTUAL_ENV is model-process input, not authority. Network may only be
+    # granted when the interpreter itself resolves inside the validated Hermes
+    # engine/runtime projection.
+    if not _hermes_runtime_read_roots(command, env):
+        return False
+
+    def checked_policy(path: Path, label: str) -> object:
+        try:
+            info = path.lstat()
+        except OSError:
+            raise IsolationError(f"model_isolation_guide_{label}_missing") from None
+        if (
+            path.is_symlink()
+            or not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or info.st_nlink != 1
+            or info.st_mode & 0o022
+        ):
+            raise IsolationError(f"model_isolation_guide_{label}_unsafe")
+        return yaml.safe_load(path.read_text(encoding="utf-8"))
+
     try:
         import yaml
-        from john_lomein_memory_contract import agent_memory_boundary_errors
-        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        errors = agent_memory_boundary_errors(config, "guide")
+        from john_lomein_memory_contract import (
+            agent_memory_boundary_errors,
+            agent_memory_managed_policy_errors,
+            managed_policy_directory,
+        )
+
+        config = checked_policy(active_profile / "config.yaml", "config")
+        managed = checked_policy(
+            managed_policy_directory(_runtime_home(env), guide_profile)
+            / "config.yaml",
+            "managed_policy",
+        )
+        errors = [
+            *agent_memory_boundary_errors(config, "guide"),
+            *agent_memory_managed_policy_errors(managed, "guide"),
+        ]
+    except IsolationError:
+        raise
     except Exception:
         raise IsolationError("model_isolation_guide_tool_contract_invalid") from None
     if errors:
@@ -995,8 +1035,6 @@ def darwin_policy(
                     f"(allow file-read* ({matcher} {_scheme_string(spelling)}))"
                 )
     lines.append(f"(deny file-read* file-write* (subpath {_scheme_string(_policy_path(protected))}))")
-    for root in _controller_readable_roots(env):
-        lines.append(f"(allow file-read* (subpath {_scheme_string(_policy_path(root))}))")
     for root in _hidden_control_roots(env):
         lines.append(
             "(deny file-read* file-write* "
@@ -1311,6 +1349,7 @@ def isolated_command(
     resolved = _resolve_command(command, env)
     hermes_invocation = _is_hermes_invocation(resolved)
     active_profile = _active_profile_root(env, profile)
+    gateway_invocation = list(resolved)
     if active_profile is not None and Path(resolved[0]).name == "hermes":
         resolved = _isolate_hermes_python_entrypoint(resolved)
     if _mode(env) == MODE_DISABLED:
@@ -1334,9 +1373,10 @@ def isolated_command(
             _validate_honcho_socket_path(honcho_socket, provider_socket)
     runtime_read_roots = _hermes_runtime_read_roots(resolved, env)
     allow_gateway_network = _guide_gateway_network_allowed(
+        env,
         active_profile,
         profile,
-        resolved,
+        gateway_invocation,
     )
     protected = private_root(env)
     _validate_private_tree(protected)
@@ -1468,8 +1508,6 @@ def isolated_command(
     for root in _hidden_control_roots(env):
         args.extend(("--tmpfs", str(root)))
     for child in sorted(private.iterdir()):
-        if child.name == "release-bundles":
-            continue
         if child.is_dir():
             args.extend(("--tmpfs", str(child)))
         else:
@@ -1596,7 +1634,7 @@ def _run_isolation_canary(
             "child=subprocess.run([sys.executable,'-c',"
             f"{child_code!r}],"
             "capture_output=True)\n"
-            "checks={'private':denied_read(private),'protected_write':denied_write(protected),'projection_read':projection.read_text().strip()=='projection','release_read':release.read_text().strip()=='release','release_write':denied_write(release),'projection_write':denied_write(projection),'outside_write':denied_create(outside),'outside_read':denied_read(outside),'descendant':child.returncode!=0}\n"
+            "checks={'private':denied_read(private),'protected_write':denied_write(protected),'projection_read':projection.read_text().strip()=='projection','release_read':denied_read(release),'release_write':denied_write(release),'projection_write':denied_write(projection),'outside_write':denied_create(outside),'outside_read':denied_read(outside),'descendant':child.returncode!=0}\n"
             "ok=all(checks.values())\n"
             "if not ok: print(checks)\n"
             "if ok:\n"

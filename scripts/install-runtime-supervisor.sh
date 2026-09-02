@@ -112,10 +112,10 @@ import plistlib, sys
 plist,label,py,profile,H,managed_dir,venv,out,err,real_home,auth_authority_home,gateway_lock_dir,gh_config,isolation,model_provider,fallback_provider=sys.argv[1:]
 obj={
   'Label': label,
-  'ProgramArguments': [py, f'{H}/scripts/john_lomein_model_isolation.py', '--profile', profile, '--', py, '-I', '-m', 'hermes_cli.main', 'gateway', 'run', '--replace'],
+  'ProgramArguments': [py, '-I', '-m', 'hermes_cli.main', 'gateway', 'run', '--replace'],
   'WorkingDirectory': f'{H}/profiles/{profile}',
   'EnvironmentVariables': {
-    'HERMES_HOME': H,
+    'HERMES_HOME': f'{H}/profiles/{profile}',
     'HERMES_HONCHO_HOST': f'hermes_{profile}',
     'HERMES_MANAGED_DIR': managed_dir,
     'JOHN_LOMEIN_INSTANCE_HERMES_HOME': H,

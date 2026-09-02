@@ -17,6 +17,24 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ProductAssetsTest(unittest.TestCase):
+    def test_honcho_watchdog_uses_source_manifest_service_identity(self):
+        deploy = (ROOT / "scripts" / "deploy-instance.sh").read_text(
+            encoding="utf-8"
+        )
+        watchdog = (
+            ROOT / "scripts" / "john-lomein-honcho-watchdog.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("BOT_INSTANCE_ROOT={sq(str(manifest.parent))}", deploy)
+        self.assertIn(
+            '--manifest "$BOT_INSTANCE_ROOT/instance.yaml"',
+            watchdog,
+        )
+        self.assertNotIn(
+            '--manifest "$BOT_INSTANCE_MANIFEST"',
+            watchdog,
+        )
+
     def test_release_identity_and_non_packageable_python_environment_are_explicit(self):
         metadata = tomllib.loads(
             (ROOT / "pyproject.toml").read_text(encoding="utf-8")

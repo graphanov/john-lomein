@@ -64,7 +64,30 @@ class ServiceRegistryTest(unittest.TestCase):
         isolated: bool = True,
     ) -> None:
         profile: str | None = None
-        if label.startswith("ai.hermes.gateway-john-lomein-"):
+        if label.startswith("ai.john-lomein.") and label.endswith(
+            ".public-honcho"
+        ):
+            arguments = [
+                str(
+                    runtime_home
+                    / "services"
+                    / "public-honcho"
+                    / "server"
+                    / ".venv"
+                    / "bin"
+                    / "python"
+                ),
+                str(
+                    runtime_home
+                    / "scripts"
+                    / "john_lomein_public_honcho_service.py"
+                ),
+                "supervise",
+                "--manifest",
+                str(runtime_home / "instance.yaml"),
+            ]
+            working_directory = runtime_home
+        elif label.startswith("ai.hermes.gateway-john-lomein-"):
             profile = "john-lomein-guide"
             arguments = [
                 "/usr/bin/python3",
@@ -89,6 +112,11 @@ class ServiceRegistryTest(unittest.TestCase):
                 "run",
                 "--replace",
             ]
+            if not isolated:
+                arguments = [
+                    "/usr/bin/python3", "-I", "-m", "hermes_cli.main",
+                    "gateway", "run", "--replace",
+                ]
             working_directory = runtime_home / "profiles" / profile
         else:
             arguments = [
@@ -128,7 +156,11 @@ class ServiceRegistryTest(unittest.TestCase):
                     "ProgramArguments": arguments,
                     "WorkingDirectory": str(working_directory),
                     "EnvironmentVariables": {
-                        "HERMES_HOME": str(runtime_home),
+                        "HERMES_HOME": str(
+                            working_directory
+                            if label.endswith("-scheduler") and not isolated
+                            else runtime_home
+                        ),
                         "JOHN_LOMEIN_INSTANCE_HERMES_HOME": str(runtime_home),
                     },
                 },
@@ -237,6 +269,120 @@ class ServiceRegistryTest(unittest.TestCase):
 
         self.assertEqual(result["stopped"], [new, old])
         self.assertFalse(old_plist.exists())
+
+    def test_stale_public_honcho_is_stopped_without_classifying_personal_honcho(
+        self,
+    ):
+        manifest, _, runtime, _, launch_agents = self.fixture()
+        old = "ai.john-lomein.old.public-honcho"
+        new = "ai.john-lomein.new.public-honcho"
+        personal = "ai.hermes.honcho.personal-api"
+        old_plist = launch_agents / f"{old}.plist"
+        personal_plist = launch_agents / f"{personal}.plist"
+        self.write_plist(old_plist, old, runtime)
+        with personal_plist.open("wb") as handle:
+            plistlib.dump(
+                {
+                    "Label": personal,
+                    "ProgramArguments": ["/usr/bin/python3", "personal.py"],
+                    "WorkingDirectory": str(runtime),
+                    "EnvironmentVariables": {
+                        "JOHN_LOMEIN_INSTANCE_HERMES_HOME": str(runtime),
+                    },
+                },
+                handle,
+            )
+        registry.record_services(manifest, runtime, {"public_honcho": old})
+
+        public_arguments = [
+            str(
+                runtime
+                / "services"
+                / "public-honcho"
+                / "server"
+                / ".venv"
+                / "bin"
+                / "python"
+            ),
+            str(runtime / "scripts" / "john_lomein_public_honcho_service.py"),
+            "supervise",
+            "--manifest",
+            str(runtime / "instance.yaml"),
+        ]
+        legacy_loaded_output = "\n".join(
+            [
+                f"program = {public_arguments[0]}",
+                "arguments = {",
+                *(f"\t{argument}" for argument in public_arguments),
+                "}",
+                f"working directory = {runtime}",
+                "environment = {",
+                "}",
+            ]
+        )
+        loaded = {old, personal}
+        booted_out: list[str] = []
+
+        def fake_run(cmd, **_kwargs):
+            action = cmd[1]
+            if action == "list":
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout="\n".join(f"- 0 {label}" for label in sorted(loaded)),
+                    stderr="",
+                )
+            if action == "print":
+                label = cmd[2].rsplit("/", 1)[-1]
+                if label == personal:
+                    raise AssertionError("personal Honcho must not be inspected")
+                if label == old and old in loaded:
+                    return SimpleNamespace(
+                        returncode=0,
+                        stdout=legacy_loaded_output,
+                        stderr="",
+                    )
+                return SimpleNamespace(
+                    returncode=1,
+                    stdout="",
+                    stderr="Could not find service",
+                )
+            if action == "bootout":
+                label = cmd[2].rsplit("/", 1)[-1]
+                booted_out.append(label)
+                loaded.discard(label)
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            raise AssertionError(f"unexpected launchctl command: {cmd}")
+
+        with mock.patch.object(
+            registry.shutil,
+            "which",
+            return_value="/usr/bin/launchctl",
+        ), mock.patch.object(registry.subprocess, "run", side_effect=fake_run):
+            result = registry.stop_services(
+                manifest,
+                runtime,
+                {"public_honcho": new},
+            )
+
+        self.assertEqual(set(result["stopped"]), {old, new})
+        self.assertEqual(set(booted_out), {old, new})
+        self.assertNotIn(personal, booted_out)
+        self.assertFalse(old_plist.exists())
+        self.assertTrue(personal_plist.exists())
+        self.assertIn(personal, loaded)
+        self.assertIsNone(registry.read_registry(manifest))
+
+    def test_public_honcho_registry_rejects_non_dedicated_honcho_labels(self):
+        manifest, _, runtime, _, _ = self.fixture()
+        with self.assertRaisesRegex(
+            registry.ServiceRegistryError,
+            "unsafe launchd label",
+        ):
+            registry.record_services(
+                manifest,
+                runtime,
+                {"public_honcho": "ai.hermes.honcho.personal-api"},
+            )
 
     def test_two_instances_cannot_own_the_same_label(self):
         (
@@ -615,25 +761,25 @@ class ServiceRegistryTest(unittest.TestCase):
         self.assertEqual(status["identity_mismatches"], [label])
         self.assertEqual(status["discovered"], [])
 
-    def test_unwrapped_scheduler_gateway_is_rejected(self):
+    def test_no_agent_scheduler_controller_is_accepted(self):
         manifest, _, runtime, _, launch_agents = self.fixture()
         label = "ai.hermes.john-lomein-alpha-scheduler"
         plist = launch_agents / f"{label}.plist"
         self.write_plist(plist, label, runtime, isolated=False)
 
         self.assertNotEqual(registry._plist_identity(plist)[2], "")
-        with self.assertRaises(registry.ServiceRegistryError):
-            registry.record_services(
-                manifest,
-                runtime,
-                {"scheduler": label},
-            )
+        recorded = registry.record_services(
+            manifest,
+            runtime,
+            {"scheduler": label},
+        )
+        self.assertEqual(recorded["labels"]["scheduler"], label)
 
     def test_plist_command_contract_is_bound_to_registered_identity(self):
         manifest, _, runtime, _, launch_agents = self.fixture()
         label = "ai.hermes.john-lomein-alpha-scheduler"
         plist = launch_agents / f"{label}.plist"
-        self.write_plist(plist, label, runtime)
+        self.write_plist(plist, label, runtime, isolated=False)
         registry.record_services(manifest, runtime, {"scheduler": label})
         with plist.open("wb") as handle:
             plistlib.dump(
@@ -872,7 +1018,7 @@ class ServiceRegistryTest(unittest.TestCase):
         registry.record_services(manifest, runtime_a, {"scheduler": label})
         with plist.open("rb") as handle:
             data = plistlib.load(handle)
-        data["EnvironmentVariables"]["HERMES_HOME"] = str(runtime_b)
+        data["EnvironmentVariables"]["JOHN_LOMEIN_INSTANCE_HERMES_HOME"] = str(runtime_b)
         with plist.open("wb") as handle:
             plistlib.dump(data, handle)
 
@@ -899,7 +1045,7 @@ class ServiceRegistryTest(unittest.TestCase):
         )
         self.assertEqual(
             registry._runtime_home_from_launchctl_output(live_output),
-            "",
+            str(runtime_a.resolve()),
         )
 
     def test_adoption_rejects_conflicting_plist_and_loaded_runtime(self):

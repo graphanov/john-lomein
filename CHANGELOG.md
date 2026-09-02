@@ -32,6 +32,7 @@ First public alpha of the macOS-first John Lomein appliance.
 - Guide and maintainer Hermes gateway LaunchAgents now both enter through the model-isolation controller; deployment, Doctor, and the service registry fail closed on missing broker assets or unwrapped current services.
 - Review-only profile qualification is now an explicit host- and product-version-specific manifest decision.
 - Honcho watchdog embedding-backlog signals are scoped to the selected workspace while shared queue health remains system-wide.
+- The dedicated public-Honcho LaunchAgent now participates in the same manifest-owned service transaction as scheduler, keepawake, and Guide services; disablement, reinstallation, slug migration, setup rollback, and uninstall reconcile current and stale product labels.
 - Release bundles and packet validation now preserve policy and quorum digests end to end.
 
 ### Security

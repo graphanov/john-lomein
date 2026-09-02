@@ -47,7 +47,10 @@ and local Honcho traffic use two separate controller-owned, per-process Unix-soc
 brokers. The Honcho route is bound to the protected profile's exact loopback origin
 and workspace; it denies listing, cross-workspace, destructive, administrative, and
 tunneling routes, and permits message writes only for a profile whose `saveMessages`
-policy does. The public Guide remains suggestion-only; private role entrypoints,
+policy does. The trusted scheduler controller is outside the model sandbox only to
+execute the exact registered `no_agent` scripts; it receives no raw model credential
+or public platform, and every scripted model turn re-enters the role sandbox and
+provider/Honcho brokers. The public Guide remains suggestion-only; private role entrypoints,
 mutation, and protected actions remain owner-gated.
 
 ## Response expectations

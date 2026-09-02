@@ -696,6 +696,13 @@ class SetupManifestTransactionTest(unittest.TestCase):
             [row[0] for row in rows],
             ["uninstall-supervisor", "deploy", "uninstall-supervisor"],
         )
+        rollback_uninstaller = (
+            ROOT / "scripts" / "uninstall-runtime-supervisor.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            '"public_honcho=$PUBLIC_HONCHO_LABEL"',
+            rollback_uninstaller,
+        )
         self.assertEqual({row[1] for row in rows}, {"snapshot-a"})
         self.assertEqual({row[2] for row in rows}, {str(self.source)})
         snapshot_paths = {row[3] for row in rows}

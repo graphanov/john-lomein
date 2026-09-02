@@ -74,17 +74,19 @@ class GatewayEntrypointIsolationTest(unittest.TestCase):
             set(gateway_installers),
             {"install-guide-gateway.sh", "install-runtime-supervisor.sh"},
         )
-        for name, source in gateway_installers.items():
-            with self.subTest(installer=name):
-                self.assertRegex(source, wrapper_pattern)
-                for asset in BROKER_ASSETS:
-                    self.assertIn(asset, source)
+        guide_source = gateway_installers["install-guide-gateway.sh"]
+        self.assertRegex(guide_source, wrapper_pattern)
+        for asset in BROKER_ASSETS:
+            self.assertIn(asset, guide_source)
+        scheduler_source = gateway_installers["install-runtime-supervisor.sh"]
+        self.assertNotRegex(scheduler_source, wrapper_pattern)
+        self.assertIn("HERMES_KANBAN_DISPATCH_IN_GATEWAY", scheduler_source)
 
         doctor = (SCRIPTS / "doctor-instance.py").read_text(encoding="utf-8")
         scheduler_check = doctor[
             doctor.index("scheduler_label=") : doctor.index("keep_label=")
         ]
-        self.assertIn("require_isolation=True", scheduler_check)
+        self.assertIn("controller_only=True", scheduler_check)
 
     def test_generated_gateway_plists_wrap_hermes_and_pin_isolation_environment(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -171,17 +173,17 @@ class GatewayEntrypointIsolationTest(unittest.TestCase):
                         "run",
                         "--replace",
                     ]
-                    self.assertEqual(
-                        plist["ProgramArguments"],
-                        [
-                            python,
-                            str(runtime / "scripts" / ISOLATION_SCRIPT),
-                            "--profile",
-                            profile,
-                            "--",
-                            *direct,
-                        ],
-                    )
+                    if installer.name == "install-runtime-supervisor.sh":
+                        self.assertEqual(plist["ProgramArguments"], direct)
+                        self.assertEqual(
+                            plist["EnvironmentVariables"]["HERMES_HOME"],
+                            str(runtime / "profiles" / profile),
+                        )
+                    else:
+                        self.assertEqual(
+                            plist["ProgramArguments"],
+                            [python, str(runtime / "scripts" / ISOLATION_SCRIPT), "--profile", profile, "--", *direct],
+                        )
                     environment = plist["EnvironmentVariables"]
                     self.assertEqual(environment["BOT_HERMES_HOME"], str(runtime))
                     self.assertEqual(

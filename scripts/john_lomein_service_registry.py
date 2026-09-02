@@ -24,9 +24,12 @@ from pathlib import Path
 from typing import Any, Mapping
 
 SCHEMA_VERSION = "john_lomein_launchd_registry/v1"
-SERVICE_KINDS = frozenset({"scheduler", "keepawake", "guide"})
+SERVICE_KINDS = frozenset({"scheduler", "keepawake", "guide", "public_honcho"})
 LABEL_RE = re.compile(
     r"^ai\.hermes\.(?:john-lomein|gateway-john-lomein)-[A-Za-z0-9._-]+$"
+)
+PUBLIC_HONCHO_LABEL_RE = re.compile(
+    r"^ai\.john-lomein\.[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.public-honcho$"
 )
 LAUNCHCTL_ENV_RE = re.compile(
     r"^\s*(JOHN_LOMEIN_INSTANCE_HERMES_HOME|HERMES_HOME)"
@@ -153,9 +156,13 @@ def registry_path(manifest: str | Path) -> Path:
     return registry_root() / f"{instance_key(manifest)}.json"
 
 
+def _is_managed_label(label: str) -> bool:
+    return bool(LABEL_RE.fullmatch(label) or PUBLIC_HONCHO_LABEL_RE.fullmatch(label))
+
+
 def _validated_label(label: Any) -> str:
     value = str(label or "").strip()
-    if not LABEL_RE.fullmatch(value):
+    if not _is_managed_label(value):
         raise ServiceRegistryError(f"unsafe launchd label: {value or '<empty>'}")
     return value
 
@@ -305,6 +312,8 @@ def _write_or_remove_registry(
 
 def _service_kind(label: str) -> str:
     label = _validated_label(label)
+    if PUBLIC_HONCHO_LABEL_RE.fullmatch(label):
+        return "public_honcho"
     if label.startswith("ai.hermes.gateway-john-lomein-") and label.endswith(
         "-guide"
     ):
@@ -391,6 +400,18 @@ def _observation_uses_model_isolation(
     )
 
 
+def _observation_uses_scheduler_controller(
+    observation: Mapping[str, Any] | None,
+) -> bool:
+    if observation is None:
+        return False
+    identities = [observation.get(key) for key in ("plist_command", "loaded_command") if observation.get(key) is not None]
+    try:
+        return bool(identities) and all(json.loads(str(identity))[1] == "scheduler-controller-v1" for identity in identities)
+    except (TypeError, ValueError, IndexError):
+        return False
+
+
 def _observation_points_at_runtime(
     observation: Mapping[str, Any],
     runtime_home: Path,
@@ -409,7 +430,7 @@ def _product_service_observations(
     if root.exists():
         for plist in sorted(root.glob("*.plist")):
             label = plist.stem
-            if not LABEL_RE.fullmatch(label):
+            if not _is_managed_label(label):
                 continue
             observation = observations.setdefault(
                 label,
@@ -517,10 +538,14 @@ def _record_services_unlocked(
                 runtime_path,
             )
             or (
-                kind in {"guide", "scheduler"}
-                and not _observation_uses_model_isolation(
-                    observation,
-                    runtime_path,
+                kind == "guide"
+                and not _observation_uses_model_isolation(observation, runtime_path)
+            )
+            or (
+                kind == "scheduler"
+                and not (
+                    _observation_uses_scheduler_controller(observation)
+                    or _observation_uses_model_isolation(observation, runtime_path)
                 )
             )
         ):
@@ -611,10 +636,40 @@ def _service_command_identity(
         working_path = canonical_path(working_directory)
     except (OSError, ServiceRegistryError):
         return ""
-    if kind == "keepawake":
-        expected_program = (
-            runtime_path / "scripts" / "john-lomein-keepawake.sh"
+    if kind == "public_honcho":
+        expected_program_arguments = [
+            str(
+                runtime_path
+                / "services"
+                / "public-honcho"
+                / "server"
+                / ".venv"
+                / "bin"
+                / "python"
+            ),
+            str(runtime_path / "scripts" / "john_lomein_public_honcho_service.py"),
+            "supervise",
+            "--manifest",
+            str(runtime_path / "instance.yaml"),
+        ]
+        if (
+            len(program_arguments) != len(expected_program_arguments)
+            or canonical_path(program_arguments[0])
+            != canonical_path(expected_program_arguments[0])
+            or canonical_path(program_arguments[1])
+            != canonical_path(expected_program_arguments[1])
+            or program_arguments[2:4] != expected_program_arguments[2:4]
+            or canonical_path(program_arguments[4])
+            != canonical_path(expected_program_arguments[4])
+            or working_path != runtime_path
+        ):
+            return ""
+        return json.dumps(
+            [kind, *expected_program_arguments, str(working_path)],
+            separators=(",", ":"),
         )
+    if kind == "keepawake":
+        expected_program = runtime_path / "scripts" / "john-lomein-keepawake.sh"
         if (
             program_arguments != [str(expected_program)]
             or working_path != runtime_path
@@ -633,6 +688,27 @@ def _service_command_identity(
         if kind == "guide"
         else "john-lomein-maintainer"
     )
+    if kind == "scheduler" and len(program_arguments) in {6, 7}:
+        isolated_python = len(program_arguments) == 7
+        expected = [
+            program_arguments[0],
+            *(["-I"] if isolated_python else []),
+            "-m",
+            "hermes_cli.main",
+            "gateway",
+            "run",
+            "--replace",
+        ]
+        if program_arguments == expected:
+            executable = canonical_path(program_arguments[0])
+            if (
+                str(executable) in _trusted_python_interpreters()
+                and working_path == runtime_path / "profiles" / profile
+            ):
+                return json.dumps(
+                    [kind, "scheduler-controller-v1", str(executable), *program_arguments[1:], str(working_path)],
+                    separators=(",", ":"),
+                )
     if kind in {"guide", "scheduler"} and len(program_arguments) in {11, 12, 13, 14}:
         expected_wrapper = (
             runtime_path / "scripts" / "john_lomein_model_isolation.py"
@@ -708,17 +784,11 @@ def _service_command_identity(
 
 
 def _runtime_home_from_environment(env: Mapping[str, Any]) -> str:
-    values: dict[str, str] = {}
-    for name in (
-        "JOHN_LOMEIN_INSTANCE_HERMES_HOME",
-        "HERMES_HOME",
-    ):
-        raw = env.get(name)
-        if raw:
-            values[name] = str(canonical_path(str(raw)))
-    if len(set(values.values())) > 1:
-        return ""
-    return next(iter(values.values()), "")
+    runtime_raw = env.get("JOHN_LOMEIN_INSTANCE_HERMES_HOME")
+    if runtime_raw:
+        return str(canonical_path(str(runtime_raw)))
+    profile_raw = env.get("HERMES_HOME")
+    return str(canonical_path(str(profile_raw))) if profile_raw else ""
 
 
 def _plist_identity(path: Path) -> tuple[str, str, str]:
@@ -795,7 +865,7 @@ def _launchctl_print(label: str) -> tuple[bool, str]:
     )
 
 
-def _runtime_home_from_launchctl_output(output: str) -> str:
+def _runtime_home_from_launchctl_output(output: str, label: str = "") -> str:
     observed: dict[str, set[str]] = {
         "JOHN_LOMEIN_INSTANCE_HERMES_HOME": set(),
         "HERMES_HOME": set(),
@@ -816,14 +886,19 @@ def _runtime_home_from_launchctl_output(output: str) -> str:
     ):
         if len(observed[name]) > 1:
             return ""
-    values = {
-        next(iter(paths))
-        for paths in observed.values()
-        if paths
-    }
-    if len(values) != 1:
-        return ""
-    return next(iter(values))
+    controller = observed["JOHN_LOMEIN_INSTANCE_HERMES_HOME"]
+    if controller:
+        return next(iter(controller))
+    profile = observed["HERMES_HOME"]
+    if profile:
+        return next(iter(profile))
+    if PUBLIC_HONCHO_LABEL_RE.fullmatch(label):
+        for line in output.splitlines():
+            match = LAUNCHCTL_WORKING_DIR_RE.match(line)
+            if match:
+                value = _clean_launchctl_value(match.group(1))
+                return str(canonical_path(value)) if value else ""
+    return ""
 
 
 def _clean_launchctl_value(raw: str) -> str:
@@ -901,11 +976,11 @@ def _loaded_product_services() -> dict[str, dict[str, Any]]:
         if not columns:
             continue
         label = columns[-1]
-        if not LABEL_RE.fullmatch(label):
+        if not _is_managed_label(label):
             continue
         loaded, output = _launchctl_print(label)
         if loaded:
-            runtime_home = _runtime_home_from_launchctl_output(output)
+            runtime_home = _runtime_home_from_launchctl_output(output, label)
             services[label] = {
                 "runtime_home": runtime_home,
                 "command_identity": _launchctl_command_identity(
@@ -936,7 +1011,7 @@ def _assert_unregistered_label_belongs_to_runtime(
             )
         return
     loaded, output = _launchctl_print(label)
-    observed = _runtime_home_from_launchctl_output(output) if loaded else ""
+    observed = _runtime_home_from_launchctl_output(output, label) if loaded else ""
     if loaded and (
         not observed
         or canonical_path(observed) != runtime_home
@@ -983,7 +1058,7 @@ def _preflight_stop_label(label: str, runtime_home: Path) -> None:
         plist_command_identity = command_identity
     loaded, output = _launchctl_print(label)
     if loaded:
-        observed_runtime = _runtime_home_from_launchctl_output(output)
+        observed_runtime = _runtime_home_from_launchctl_output(output, label)
         loaded_command_identity = _launchctl_command_identity(
             label,
             observed_runtime,

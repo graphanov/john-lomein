@@ -330,6 +330,11 @@ def agent_memory_boundary_errors(
         required_platforms = {"cli"}
         if role == "guide":
             required_platforms.add("discord")
+            actual_platforms = {str(platform) for platform in platform_toolsets}
+            if actual_platforms != required_platforms:
+                errors.append(
+                    "public Guide platform_toolsets must contain exactly cli and discord"
+                )
         for platform in sorted(required_platforms):
             entries = platform_toolsets.get(platform)
             if role == "guide" and entries != [NO_MCP_SENTINEL]:
@@ -346,6 +351,11 @@ def agent_memory_boundary_errors(
             if not isinstance(entries, list):
                 errors.append(
                     f"platform_toolsets.{platform} must be a list"
+                )
+                continue
+            if role == "guide" and entries != [NO_MCP_SENTINEL]:
+                errors.append(
+                    f"public Guide platform_toolsets.{platform} must contain no model tools"
                 )
                 continue
             aliases = sorted(

@@ -134,16 +134,28 @@ class HonchoPilotTest(unittest.TestCase):
             "embedding_count": 14,
             "document_count": 6,
             "schema_fingerprint": "a" * 64,
+            "generated_at": "2026-09-01T00:00:00Z",
         }
         candidate_sets = {key: [] for key in RETENTION_CANDIDATE_KEYS}
         candidate_sets.update(
             {
                 "message_ids": [11, 12],
                 "message_public_ids": ["m11", "m12"],
+                "message_identities": [
+                    {"id": 11, "public_id": "m11", "fingerprint": "sha256:" + "1" * 64},
+                    {"id": 12, "public_id": "m12", "fingerprint": "sha256:" + "2" * 64},
+                ],
                 "embedding_ids": [21, 22],
+                "embedding_identities": [
+                    {"id": 21, "message_id": "m11", "fingerprint": "sha256:" + "3" * 64},
+                    {"id": 22, "message_id": "m12", "fingerprint": "sha256:" + "4" * 64},
+                ],
                 "document_ids": ["d31"],
                 "queue_ids": [41],
                 "work_unit_keys": ["w1"],
+                "queue_identities": [
+                    {"id": 41, "work_unit_key": "w1", "fingerprint": "sha256:" + "5" * 64}
+                ],
             }
         )
         values.update(
@@ -261,13 +273,25 @@ class HonchoPilotTest(unittest.TestCase):
             "session_peer_link_keys": ["session-1|participant-42", "session-1|guide"],
             "message_ids": [11, 12, 13, 14],
             "message_public_ids": ["m11", "m12", "m13", "m14"],
+            "message_identities": [
+                {"id": value, "public_id": f"m{value}", "fingerprint": "sha256:" + f"{value % 10}" * 64}
+                for value in (11, 12, 13, 14)
+            ],
         })
         candidate_sets.update({
             "embedding_ids": [21, 22, 23, 24],
+            "embedding_identities": [
+                {"id": value, "message_id": f"m{value - 10}", "fingerprint": "sha256:" + f"{value % 10}" * 64}
+                for value in (21, 22, 23, 24)
+            ],
             "document_ids": [31, 32, 33],
             "collection_ids": ["c1", "c2"],
             "queue_ids": [41, 42],
             "work_unit_keys": ["w1"],
+            "queue_identities": [
+                {"id": 41, "work_unit_key": "w1", "fingerprint": "sha256:" + "1" * 64},
+                {"id": 42, "work_unit_key": "w1", "fingerprint": "sha256:" + "2" * 64},
+            ],
         })
         plan = make_participant_deletion_plan(
             database_oid=123,

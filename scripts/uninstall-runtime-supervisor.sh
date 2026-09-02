@@ -34,12 +34,15 @@ eval "$("${PRODUCT_PYTHON[@]}" "$READ_ENV" "$1")"
 SCHED_LABEL="ai.hermes.john-lomein-${BOT_SLUG}-scheduler"
 KEEP_LABEL="ai.hermes.john-lomein-${BOT_SLUG}-keepawake"
 GUIDE_LABEL="ai.hermes.gateway-john-lomein-${BOT_SLUG}-guide"
+PUBLIC_HONCHO_LABEL="ai.john-lomein.${BOT_SLUG}.public-honcho"
 "${PRODUCT_PYTHON[@]}" "$SERVICE_REGISTRY" stop \
   --manifest "$JL_INSTANCE_MANIFEST" \
   --runtime-home "$BOT_HERMES_HOME" \
   --service "scheduler=$SCHED_LABEL" \
   --service "keepawake=$KEEP_LABEL" \
-  --service "guide=$GUIDE_LABEL" >/dev/null
+  --service "guide=$GUIDE_LABEL" \
+  --service "public_honcho=$PUBLIC_HONCHO_LABEL" >/dev/null
 echo "verified absent and removed launchagent if present: $SCHED_LABEL"
 echo "verified absent and removed launchagent if present: $KEEP_LABEL"
 echo "verified absent and removed launchagent if present: $GUIDE_LABEL"
+echo "verified absent and removed launchagent if present: $PUBLIC_HONCHO_LABEL"

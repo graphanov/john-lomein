@@ -12,6 +12,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,7 +23,10 @@ if str(SCRIPTS) not in sys.path:
 from john_lomein_manifest_contract import (  # noqa: E402
     model_memory_isolation_mode,
 )
-from john_lomein_memory_contract import apply_agent_memory_boundary  # noqa: E402
+from john_lomein_memory_contract import (  # noqa: E402
+    agent_memory_managed_policy,
+    apply_agent_memory_boundary,
+)
 from john_lomein_honcho_broker import (  # noqa: E402
     HonchoBinding,
     create_server as create_honcho_server,
@@ -78,6 +82,13 @@ class ModelMemoryIsolationTest(unittest.TestCase):
             home / "profiles" / "john-lomein-guide" / "hooks",
             home / "profiles" / "john-lomein-guide" / "bin",
             home / "profiles" / "john-lomein-guide" / "skins",
+            owner_home / ".hermes" / "hermes-agent" / "venv" / "bin",
+            owner_home
+            / ".hermes"
+            / "hermes-agent"
+            / ".hermes-runtime"
+            / "python"
+            / "bin",
             checkout,
         ):
             path.mkdir(parents=True, exist_ok=True)
@@ -125,6 +136,40 @@ class ModelMemoryIsolationTest(unittest.TestCase):
             encoding="utf-8",
         )
         (profile / "config.yaml").write_text("{}\n", encoding="utf-8")
+        import yaml
+
+        (
+            home
+            / "managed-policy"
+            / "john-lomein-guide"
+            / "config.yaml"
+        ).write_text(
+            yaml.safe_dump(
+                agent_memory_managed_policy("guide"),
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        runtime_python = (
+            owner_home
+            / ".hermes"
+            / "hermes-agent"
+            / ".hermes-runtime"
+            / "python"
+            / "bin"
+            / "python3"
+        )
+        runtime_python.write_bytes(b"trusted hermes python fixture\n")
+        runtime_python.chmod(0o700)
+        hermes_python = (
+            owner_home
+            / ".hermes"
+            / "hermes-agent"
+            / "venv"
+            / "bin"
+            / "python3"
+        )
+        hermes_python.symlink_to(runtime_python)
         shutil.copytree(
             home / "scripts",
             profile / "scripts",
@@ -161,7 +206,20 @@ class ModelMemoryIsolationTest(unittest.TestCase):
             "HERMES_MANAGED_DIR": str(
                 home / "managed-policy" / "john-lomein-guide"
             ),
+            "VIRTUAL_ENV": str(hermes_python.parent.parent),
         }
+
+    @staticmethod
+    def canonical_guide_gateway_command(env: dict[str, str]) -> list[str]:
+        return [
+            str(Path(env["VIRTUAL_ENV"]) / "bin" / "python3"),
+            "-I",
+            "-m",
+            "hermes_cli.main",
+            "gateway",
+            "run",
+            "--replace",
+        ]
 
     @staticmethod
     def bind_profile_plugin(env: dict[str, str], name: str) -> Path:
@@ -200,7 +258,7 @@ class ModelMemoryIsolationTest(unittest.TestCase):
             )
             command = isolated_command(
                 env,
-                [sys.executable, "-m", "hermes_cli.main", "gateway", "run"],
+                self.canonical_guide_gateway_command(env),
                 profile="john-lomein-guide",
                 system="Darwin",
                 which=lambda name, path=None: "/usr/bin/sandbox-exec",
@@ -220,11 +278,191 @@ class ModelMemoryIsolationTest(unittest.TestCase):
             ):
                 isolated_command(
                     env,
-                    [sys.executable, "-m", "hermes_cli.main", "gateway", "run"],
+                    self.canonical_guide_gateway_command(env),
                     profile="john-lomein-guide",
                     system="Darwin",
                     which=lambda name, path=None: "/usr/bin/sandbox-exec",
                 )
+
+    def test_public_guide_gateway_network_requires_exact_canonical_invocation(self):
+        import yaml
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env = self.fixture(Path(tmp))
+            profile = (
+                Path(env["BOT_HERMES_HOME"])
+                / "profiles"
+                / "john-lomein-guide"
+            )
+            config: dict = {}
+            apply_agent_memory_boundary(config, "guide")
+            (profile / "config.yaml").write_text(
+                yaml.safe_dump(config, sort_keys=False),
+                encoding="utf-8",
+            )
+            noncanonical = (
+                [
+                    sys.executable,
+                    "-I",
+                    "-m",
+                    "hermes_cli.main",
+                    "chat",
+                    "gateway",
+                    "run",
+                    "--replace",
+                ],
+                self.canonical_guide_gateway_command(env)[:-1],
+                [*self.canonical_guide_gateway_command(env), "--extra"],
+            )
+            for candidate in noncanonical:
+                with self.subTest(command=candidate):
+                    command = isolated_command(
+                        env,
+                        candidate,
+                        profile="john-lomein-guide",
+                        system="Darwin",
+                        which=lambda name, path=None: "/usr/bin/sandbox-exec",
+                    )
+                    policy = next(
+                        item
+                        for item in command
+                        if item.startswith("(version 1)")
+                    )
+                    self.assertNotIn("(allow network-outbound)", policy)
+                    self.assertNotIn("(allow network-bind)", policy)
+
+    def test_public_guide_gateway_network_rejects_untrusted_python_runtime(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            env = self.fixture(root)
+            profile = Path(env["BOT_HERMES_HOME"]) / "profiles" / "john-lomein-guide"
+            import yaml
+
+            config = yaml.safe_load(
+                (profile / "config.yaml").read_text(encoding="utf-8")
+            )
+            apply_agent_memory_boundary(config, "guide")
+            (profile / "config.yaml").write_text(
+                yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
+            )
+            evil_venv = root / "evil" / "venv"
+            evil_python = evil_venv / "bin" / "python3"
+            evil_python.parent.mkdir(parents=True)
+            evil_python.write_bytes(b"not hermes\n")
+            evil_python.chmod(0o700)
+            env["VIRTUAL_ENV"] = str(evil_venv)
+
+            command = isolated_command(
+                env,
+                self.canonical_guide_gateway_command(env),
+                profile="john-lomein-guide",
+                system="Darwin",
+                which=lambda name, path=None: "/usr/bin/sandbox-exec",
+            )
+
+            policy = command[command.index("-p") + 1]
+            self.assertNotIn("(allow network-outbound)", policy)
+            self.assertNotIn("(allow network-bind)", policy)
+
+    def test_public_guide_gateway_network_rejects_extra_raw_platform_tools(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = self.fixture(Path(tmp))
+            profile = Path(env["BOT_HERMES_HOME"]) / "profiles" / "john-lomein-guide"
+            import yaml
+
+            config = yaml.safe_load(
+                (profile / "config.yaml").read_text(encoding="utf-8")
+            )
+            apply_agent_memory_boundary(config, "guide")
+            config["platform_toolsets"]["slack"] = ["web"]
+            (profile / "config.yaml").write_text(
+                yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
+            )
+
+            with self.assertRaisesRegex(
+                IsolationError,
+                "model_isolation_guide_tool_contract_invalid",
+            ):
+                isolated_command(
+                    env,
+                    self.canonical_guide_gateway_command(env),
+                    profile="john-lomein-guide",
+                    system="Darwin",
+                    which=lambda name, path=None: "/usr/bin/sandbox-exec",
+                )
+
+    def test_public_guide_gateway_network_rejects_managed_policy_drift(self):
+        import yaml
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env = self.fixture(Path(tmp))
+            home = Path(env["BOT_HERMES_HOME"])
+            profile = home / "profiles" / "john-lomein-guide"
+            config: dict = {}
+            apply_agent_memory_boundary(config, "guide")
+            (profile / "config.yaml").write_text(
+                yaml.safe_dump(config, sort_keys=False),
+                encoding="utf-8",
+            )
+            managed = agent_memory_managed_policy("guide")
+            managed["platform_toolsets"]["discord"] = ["web", "no_mcp"]
+            (
+                home
+                / "managed-policy"
+                / "john-lomein-guide"
+                / "config.yaml"
+            ).write_text(
+                yaml.safe_dump(managed, sort_keys=False),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                IsolationError,
+                "model_isolation_guide_tool_contract_invalid",
+            ):
+                isolated_command(
+                    env,
+                    self.canonical_guide_gateway_command(env),
+                    profile="john-lomein-guide",
+                    system="Darwin",
+                    which=lambda name, path=None: "/usr/bin/sandbox-exec",
+                )
+
+    def test_network_enabled_guide_still_hides_release_bundles(self):
+        import yaml
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env = self.fixture(Path(tmp))
+            home = Path(env["BOT_HERMES_HOME"])
+            profile = home / "profiles" / "john-lomein-guide"
+            config: dict = {}
+            apply_agent_memory_boundary(config, "guide")
+            (profile / "config.yaml").write_text(
+                yaml.safe_dump(config, sort_keys=False),
+                encoding="utf-8",
+            )
+
+            command = isolated_command(
+                env,
+                self.canonical_guide_gateway_command(env),
+                profile="john-lomein-guide",
+                system="Darwin",
+                which=lambda name, path=None: "/usr/bin/sandbox-exec",
+            )
+            policy = next(
+                item for item in command if item.startswith("(version 1)")
+            )
+            release_bundles = (home / "private" / "release-bundles").resolve()
+            self.assertIn("(allow network-outbound)", policy)
+            self.assertIn(
+                "(deny file-read* file-write* "
+                f'(subpath "{release_bundles}"))',
+                policy,
+            )
+            self.assertNotIn(
+                f'(allow file-read* (subpath "{release_bundles}"))',
+                policy,
+            )
 
     def test_manifest_requires_boundary_when_learning_is_enabled(self):
         self.assertEqual(model_memory_isolation_mode({}), "required")
@@ -273,6 +511,7 @@ class ModelMemoryIsolationTest(unittest.TestCase):
                 policy,
             )
             hidden = (
+                home / "private" / "release-bundles",
                 home / "state" / "honcho",
                 home / "private" / "honcho-deletion-tombstones",
                 home / "private" / "honcho-backups",
@@ -296,6 +535,37 @@ class ModelMemoryIsolationTest(unittest.TestCase):
                 f'(deny file-write* (literal "{(home / "profiles" / "john-lomein-guide" / "SOUL.md").resolve()}"))',
                 policy,
             )
+
+    def test_release_bundle_root_must_exist_before_any_model_policy_is_built(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = self.fixture(Path(tmp))
+            release_root = (
+                Path(env["BOT_HERMES_HOME"])
+                / "private"
+                / "release-bundles"
+            )
+            release_root.rmdir()
+
+            with self.assertRaisesRegex(
+                IsolationError,
+                "release_bundle_controller_root_unsafe",
+            ):
+                darwin_policy(env)
+
+    def test_release_bundle_inode_aliases_fail_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = self.fixture(Path(tmp))
+            home = Path(env["BOT_HERMES_HOME"])
+            bundle = home / "private" / "release-bundles" / "bundle.json"
+            alias = home / "work" / "bundle-alias.json"
+            bundle.write_text("{}\n", encoding="utf-8")
+            os.link(bundle, alias)
+
+            with self.assertRaisesRegex(
+                IsolationError,
+                "model_isolation_release_bundles_file_unsafe",
+            ):
+                darwin_policy(env)
 
     def test_active_profile_is_the_only_profile_scoped_write_grant(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -337,7 +607,7 @@ class ModelMemoryIsolationTest(unittest.TestCase):
             root = Path(tmp)
             env = self.fixture(root)
             authority = root / "owner" / ".hermes"
-            authority.mkdir(parents=True)
+            authority.mkdir(parents=True, exist_ok=True)
             (authority / "auth.json").write_text(
                 '{"refresh_token":"never model-readable"}\n',
                 encoding="utf-8",
@@ -415,7 +685,7 @@ class ModelMemoryIsolationTest(unittest.TestCase):
             env = self.fixture(root)
             real_home = root / "owner"
             authority = real_home / ".hermes"
-            authority.mkdir(parents=True)
+            authority.mkdir(parents=True, exist_ok=True)
             (authority / "auth.json").write_text("{}\n", encoding="utf-8")
             redirected = root / "redirected-auth"
             redirected.mkdir()
@@ -509,13 +779,15 @@ class ModelMemoryIsolationTest(unittest.TestCase):
             self.assertEqual(command[review_index - 1], "--tmpfs")
             home = Path(env["BOT_HERMES_HOME"])
             for root in (
+                home / "private" / "release-bundles",
                 home / "state" / "honcho",
                 home / "private" / "honcho-deletion-tombstones",
                 home / "private" / "honcho-backups",
                 home / "services" / "public-honcho",
                 home / "logs" / "public-honcho",
             ):
-                index = command.index(str(root))
+                root_text = str(root)
+                index = command.index(root_text)
                 self.assertEqual(command[index - 1], "--tmpfs")
             projection_index = command.index(projection)
             self.assertEqual(command[projection_index - 1], "--ro-bind")
@@ -941,7 +1213,7 @@ class ModelMemoryIsolationTest(unittest.TestCase):
             root = Path(tmp)
             env = self.fixture(root)
             authority = root / "owner" / ".hermes"
-            authority.mkdir(mode=0o700)
+            authority.mkdir(mode=0o700, exist_ok=True)
             (authority / "auth.json").write_text("{}\n", encoding="utf-8")
             env.update(
                 {

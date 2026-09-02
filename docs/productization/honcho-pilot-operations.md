@@ -29,6 +29,8 @@ Provisioning creates only product-owned runtime paths, clones the approved remot
 
 Provisioning fails without local PostgreSQL database-creation and migration privileges. It never falls back to `honcho_local`, a shared database, the personal checkout, or personal Redis. An existing checkout must already have the approved remote, exact HEAD, and an empty tracked/untracked status; provisioning does not clean, reset, or repurpose it.
 
+The supervisor label is committed to the canonical instance service registry only after launchd and both child health checks succeed. Any install failure reconciles the partial plist/job before returning an error. Setup, direct deployment, Guide disablement, and `make uninstall-supervisor` use the same locked ownership rules, so current and registered or discoverable old-slug `ai.john-lomein.<slug>.public-honcho` jobs are removed. This matching is intentionally exact and never includes personal `ai.hermes.honcho.*` services.
+
 ## Startup reconciliation
 
 Before API or deriver children start, the supervisor:

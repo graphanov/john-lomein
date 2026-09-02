@@ -580,7 +580,7 @@ def launchagent_environment(label: str) -> dict:
     if not isinstance(values,dict):
         raise ValueError(f'LaunchAgent environment missing: {path}')
     return values
-def check_launchagent_model_environment(label,profile,H,*,require_isolation=False):
+def check_launchagent_model_environment(label,profile,H,*,require_isolation=False,controller_only=False):
     try:
         values=launchagent_environment(label)
     except ValueError as exc:
@@ -594,6 +594,24 @@ def check_launchagent_model_environment(label,profile,H,*,require_isolation=Fals
             'HERMES_KANBAN_DISPATCH_IN_GATEWAY'
         )=='0',
     }
+    if controller_only:
+        plist_path=Path.home()/"Library"/"LaunchAgents"/f"{label}.plist"
+        try:
+            plist=plistlib.loads(plist_path.read_bytes())
+        except Exception:
+            plist={}
+        args=plist.get("ProgramArguments") or []
+        try:
+            controller_state=json.loads((H/"profiles"/profile/"gateway_state.json").read_text())
+        except Exception:
+            controller_state={}
+        checks.update({
+            "controller_entrypoint": args[1:] == ["-I","-m","hermes_cli.main","gateway","run","--replace"],
+            "controller_profile_home": values.get("HERMES_HOME") == str(H/"profiles"/profile),
+            "controller_runtime_home": values.get("JOHN_LOMEIN_INSTANCE_HERMES_HOME") == str(H),
+            "controller_has_no_raw_provider_secret": not any(name in values for name in ("OPENAI_API_KEY","ANTHROPIC_API_KEY","OPENROUTER_API_KEY")),
+            "controller_has_no_public_platforms": controller_state.get("platforms") == {},
+        })
     if require_isolation:
         plist_path=Path.home()/'Library'/'LaunchAgents'/f'{label}.plist'
         try:
@@ -629,7 +647,7 @@ def check_launchagent_model_environment(label,profile,H,*,require_isolation=Fals
         'OK' if ok else 'FAIL',
         f'{label} pins profile managed policy without Mnemosyne model env '
         'and disables unused Hermes Kanban dispatch'
-        + (' and enters the OS model sandbox' if require_isolation else '')
+        + (' and enters the OS model sandbox' if require_isolation else (' and is a no-agent controller' if controller_only else ''))
         if ok
         else f'{label} model environment contract failed checks={failed}',
     )
@@ -1964,7 +1982,7 @@ def main():
             scheduler_label,
             role_profiles['maintainer'],
             H,
-            require_isolation=True,
+            controller_only=True,
         )
     else:
         note('OK' if not launch_loaded(scheduler_label) else 'FAIL', f'scheduler LaunchAgent not required while owner-gated' if not launch_loaded(scheduler_label) else f'scheduler LaunchAgent loaded while owner-gated: {scheduler_label}')
@@ -1990,6 +2008,7 @@ def main():
         expected_services['keepawake']=keep_label
     if guide_required:
         expected_services['guide']=guide_label
+        expected_services['public_honcho']=supervisor_label
     try:
         service_status=registry_status(manifest,H,expected_services)
         note(

@@ -39,7 +39,8 @@ conflicting_peers AS (
     AND NOT EXISTS (SELECT 1 FROM service_peers a WHERE a.name=m.peer_name)
 ),
 candidate_messages AS (
-  SELECT DISTINCT m.id, m.public_id
+  SELECT DISTINCT m.id, m.public_id,
+         'sha256:' || encode(sha256(convert_to(to_jsonb(m)::text,'UTF8')),'hex') AS fingerprint
   FROM messages m
   WHERE m.workspace_name=:'workspace'
     AND (m.peer_name=:'peer' OR m.session_name IN (SELECT name FROM target_sessions))
@@ -117,7 +118,8 @@ candidate_queue_seed AS (
   )
 ),
 candidate_queue AS (
-  SELECT DISTINCT q.id, q.work_unit_key
+  SELECT DISTINCT q.id, q.work_unit_key,
+         'sha256:' || encode(sha256(convert_to(to_jsonb(q)::text,'UTF8')),'hex') AS fingerprint
   FROM queue q
   WHERE q.workspace_name=:'workspace' AND (
     q.id IN (SELECT id FROM candidate_queue_seed)
@@ -163,13 +165,28 @@ malformed_lineage AS (
   )
 ),
 candidate_embeddings AS (
-  SELECT e.id FROM message_embeddings e
+  SELECT e.id, e.message_id,
+         'sha256:' || encode(sha256(convert_to(to_jsonb(e)::text,'UTF8')),'hex') AS fingerprint
+  FROM message_embeddings e
   WHERE e.workspace_name=:'workspace'
     AND e.message_id IN (SELECT public_id FROM candidate_messages)
 ),
 candidate_active_units AS (
   SELECT a.id, a.work_unit_key FROM active_queue_sessions a
   WHERE a.work_unit_key IN (SELECT work_unit_key FROM candidate_queue)
+),
+sequence_sources(table_name,column_name,sequence_name,max_id) AS (
+  SELECT 'messages','id',pg_get_serial_sequence('messages','id'),COALESCE((SELECT max(id) FROM messages),0)::bigint
+  UNION ALL
+  SELECT 'message_embeddings','id',pg_get_serial_sequence('message_embeddings','id'),COALESCE((SELECT max(id) FROM message_embeddings),0)::bigint
+  UNION ALL
+  SELECT 'queue','id',pg_get_serial_sequence('queue','id'),COALESCE((SELECT max(id) FROM queue),0)::bigint
+),
+sequence_high_waters AS (
+  SELECT table_name, column_name, sequence_name,
+         GREATEST(max_id,COALESCE(pg_sequence_last_value(to_regclass(sequence_name)),0))::bigint AS high_water
+  FROM sequence_sources
+  WHERE sequence_name IS NOT NULL
 )
 SELECT json_build_object(
   'peer_ids', COALESCE((SELECT json_agg(id ORDER BY id) FROM peers WHERE workspace_name=:'workspace' AND name=:'peer'), '[]'::json),
@@ -178,14 +195,18 @@ SELECT json_build_object(
   'session_names', COALESCE((SELECT json_agg(name ORDER BY name) FROM target_sessions), '[]'::json),
   'message_ids', COALESCE((SELECT json_agg(id ORDER BY id) FROM candidate_messages), '[]'::json),
   'message_public_ids', COALESCE((SELECT json_agg(public_id ORDER BY public_id) FROM candidate_messages), '[]'::json),
+  'message_identities', COALESCE((SELECT json_agg(json_build_object('id',id,'public_id',public_id,'fingerprint',fingerprint) ORDER BY id) FROM candidate_messages),'[]'::json),
   'embedding_ids', COALESCE((SELECT json_agg(id ORDER BY id) FROM candidate_embeddings), '[]'::json),
+  'embedding_identities', COALESCE((SELECT json_agg(json_build_object('id',id,'message_id',message_id,'fingerprint',fingerprint) ORDER BY id) FROM candidate_embeddings),'[]'::json),
   'document_ids', COALESCE((SELECT json_agg(id ORDER BY id) FROM candidate_documents), '[]'::json),
   'collection_ids', COALESCE((SELECT json_agg(id ORDER BY id) FROM candidate_collections), '[]'::json),
   'queue_ids', COALESCE((SELECT json_agg(id ORDER BY id) FROM candidate_queue), '[]'::json),
+  'queue_identities', COALESCE((SELECT json_agg(json_build_object('id',id,'work_unit_key',work_unit_key,'fingerprint',fingerprint) ORDER BY id) FROM candidate_queue),'[]'::json),
   'work_unit_keys', COALESCE((SELECT json_agg(DISTINCT work_unit_key ORDER BY work_unit_key) FROM candidate_queue), '[]'::json),
   'active_queue_session_ids', COALESCE((SELECT json_agg(id ORDER BY id) FROM candidate_active_units), '[]'::json),
   'active_work_unit_keys', COALESCE((SELECT json_agg(work_unit_key ORDER BY work_unit_key) FROM candidate_active_units), '[]'::json),
   'conflicting_peers', COALESCE((SELECT json_agg(name ORDER BY name) FROM conflicting_peers), '[]'::json),
   'unknown_touching_queue_ids', COALESCE((SELECT json_agg(id ORDER BY id) FROM unknown_touching_queue), '[]'::json),
-  'malformed_lineage_ids', COALESCE((SELECT json_agg(id ORDER BY id) FROM malformed_lineage), '[]'::json)
+  'malformed_lineage_ids', COALESCE((SELECT json_agg(id ORDER BY id) FROM malformed_lineage), '[]'::json),
+  'sequence_high_waters', COALESCE((SELECT json_agg(json_build_object('table',table_name,'column',column_name,'sequence',sequence_name,'high_water',high_water) ORDER BY table_name) FROM sequence_high_waters),'[]'::json)
 )::text;

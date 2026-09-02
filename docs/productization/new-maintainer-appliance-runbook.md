@@ -269,4 +269,4 @@ The merge receipt proves only the protected merge/readback result. Automatic pos
 make -C /path/to/john-lomein-product uninstall-supervisor INSTANCE=/path/to/john-lomein-<slug>
 ```
 
-Then pause/remove instance crons from the instance runtime if retiring the bot. Do not delete runtime folders before checking active LaunchAgents, gateway processes, and logs.
+Then pause/remove instance crons from the instance runtime if retiring the bot. The uninstaller also removes the manifest-owned dedicated public-Honcho supervisor, including registered or discoverable labels from an earlier slug, but never personal `ai.hermes.honcho.*` services. Do not delete runtime folders before checking active LaunchAgents, gateway processes, and logs.
