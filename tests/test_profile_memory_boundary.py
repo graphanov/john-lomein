@@ -50,6 +50,42 @@ doctor = load_doctor()
 
 
 class ProfileMemoryContractTest(unittest.TestCase):
+    def test_guide_github_auth_probe_removes_inherited_authority(self):
+        captured = {}
+
+        def fake_run(command, **kwargs):
+            captured["command"] = command
+            captured["env"] = dict(kwargs["env"])
+            return subprocess.CompletedProcess(command, 1, "", "not logged in")
+
+        inherited = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "GH_TOKEN": "inherited-gh-token",
+            "GITHUB_TOKEN": "inherited-github-token",
+            "GH_ENTERPRISE_TOKEN": "inherited-enterprise-token",
+            "GITHUB_ENTERPRISE_TOKEN": "inherited-github-enterprise-token",
+            "GH_HOST": "inherited.example",
+            "GH_CONFIG_DIR": "/inherited/config",
+        }
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            os.environ, inherited, clear=True
+        ), mock.patch.object(doctor.subprocess, "run", side_effect=fake_run):
+            profile_home = Path(tmp) / "guide-home"
+            self.assertFalse(doctor.gh_auth(profile_home))
+
+        for key in (
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "GH_ENTERPRISE_TOKEN",
+            "GITHUB_ENTERPRISE_TOKEN",
+            "GH_HOST",
+        ):
+            self.assertNotIn(key, captured["env"])
+        self.assertEqual(
+            captured["env"]["GH_CONFIG_DIR"],
+            str(profile_home / ".config" / "gh"),
+        )
+
     def test_apply_boundary_removes_stale_provider_and_preserves_unrelated_config(self):
         for role in sorted(OPERATIONAL_ROLES):
             with self.subTest(role=role):

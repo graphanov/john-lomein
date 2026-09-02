@@ -137,8 +137,10 @@ def authority_projection_evidence(posture):
         effective['discord'] and effective['guide_gateway']
     )
     return {'requested':requested,'effective':effective}
-def sh(cmd,cwd=None,env=None,timeout=45):
+def sh(cmd,cwd=None,env=None,timeout=45,unset_env=()):
     e=dict(os.environ)
+    for key in unset_env:
+        e.pop(key,None)
     if env: e.update(env)
     home=Path(e.get('BOT_HERMES_HOME') or e.get('HERMES_HOME') or '')
     profile=e.get('BOT_MAINTAINER_PROFILE') or 'john-lomein-maintainer'
@@ -354,11 +356,12 @@ def source_pair(label, expected_text, dst):
     note('OK' if actual==expected_text else 'WARN', f'{label}: source matches deployed' if actual==expected_text else f'{label}: source/deployed drift')
 def gh_auth(home: Path):
     env=dict(os.environ)
-    for key in ('GH_TOKEN','GITHUB_TOKEN','GH_ENTERPRISE_TOKEN','GITHUB_ENTERPRISE_TOKEN','GH_HOST'):
+    inherited_authority=('GH_TOKEN','GITHUB_TOKEN','GH_ENTERPRISE_TOKEN','GITHUB_ENTERPRISE_TOKEN','GH_HOST')
+    for key in inherited_authority:
         env.pop(key,None)
     env.pop('GH_CONFIG_DIR',None)
     env.update({'HOME':str(home),'XDG_CONFIG_HOME':str(home/'.config'),'XDG_STATE_HOME':str(home/'.local'/'state'),'XDG_DATA_HOME':str(home/'.local'/'share'),'GH_CONFIG_DIR':str(home/'.config'/'gh')})
-    c,o,e=sh(['gh','auth','status','--hostname','github.com'],env=env,timeout=30)
+    c,o,e=sh(['gh','auth','status','--hostname','github.com'],env=env,timeout=30,unset_env=inherited_authority)
     return c==0 and 'Logged in to github.com' in (o+e)
 def parse_tools(profile,H):
     c,o,e=sh(
