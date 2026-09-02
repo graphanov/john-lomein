@@ -353,8 +353,11 @@ def source_pair(label, expected_text, dst):
     actual=dst.read_text(encoding='utf-8', errors='ignore')
     note('OK' if actual==expected_text else 'WARN', f'{label}: source matches deployed' if actual==expected_text else f'{label}: source/deployed drift')
 def gh_auth(home: Path):
-    env=dict(os.environ); env.pop('GH_TOKEN',None); env.pop('GITHUB_TOKEN',None)
-    env.update({'HOME':str(home),'XDG_CONFIG_HOME':str(home/'.config'),'XDG_STATE_HOME':str(home/'.local/state'),'XDG_DATA_HOME':str(home/'.local/share')})
+    env=dict(os.environ)
+    for key in ('GH_TOKEN','GITHUB_TOKEN','GH_ENTERPRISE_TOKEN','GITHUB_ENTERPRISE_TOKEN','GH_HOST'):
+        env.pop(key,None)
+    env.pop('GH_CONFIG_DIR',None)
+    env.update({'HOME':str(home),'XDG_CONFIG_HOME':str(home/'.config'),'XDG_STATE_HOME':str(home/'.local'/'state'),'XDG_DATA_HOME':str(home/'.local'/'share'),'GH_CONFIG_DIR':str(home/'.config'/'gh')})
     c,o,e=sh(['gh','auth','status','--hostname','github.com'],env=env,timeout=30)
     return c==0 and 'Logged in to github.com' in (o+e)
 def parse_tools(profile,H):

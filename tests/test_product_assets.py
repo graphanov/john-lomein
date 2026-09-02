@@ -866,6 +866,7 @@ class ProductAssetsTest(unittest.TestCase):
             "public Guide must not have profile-local GitHub credentials",
             doctor,
         )
+        self.assertIn("env.pop('GH_CONFIG_DIR',None)", doctor)
         self.assertNotIn("MNEMOSYNE_DATA_DIR", installer)
         guide = (
             ROOT / "profiles" / "john-lomein-guide" / "SOUL.md"
